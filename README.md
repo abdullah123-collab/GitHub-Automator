@@ -78,8 +78,6 @@ A powerful VS Code extension that automates GitHub workflows with AI-powered com
 
 ## Project Structure
 
-## Project Structure
-
 ```
 github-automator/
 ├── backend/          # Python backend services
