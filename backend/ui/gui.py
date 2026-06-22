@@ -9,6 +9,7 @@ Features:
 - AI-generated commit messages
 - Branch status display
 - File change preview
+- Smart Open: auto-detects existing clones, opens in VS Code
 
 Input  (stdin): JSON { "token": "ghp_xxx" }
 Output: Opens a tkinter window with GitHub and Git automation tools
@@ -21,8 +22,8 @@ import subprocess
 import tkinter as tk
 import os
 from tkinter import ttk, messagebox, simpledialog, filedialog, scrolledtext
-from github_api import GitHubAPI
-from ai_commit import generate_commit_message
+from services.github_api import GitHubAPI
+from services.ai_commit import generate_commit_message
 
 
 # ─── Theme Colors ─────────────────────────────────────────────────
@@ -51,14 +52,12 @@ def is_git_repo(path: str) -> bool:
 def get_git_status(repo_path: str) -> dict:
     """Get current Git status (branch, changes count, etc.)."""
     try:
-        # Get current branch
         result = subprocess.run(
             ["git", "branch", "--show-current"],
             cwd=repo_path, capture_output=True, text=True, timeout=5
         )
         branch = result.stdout.strip() or "detached"
-        
-        # Get status summary
+
         result = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=repo_path, capture_output=True, text=True, timeout=5
@@ -66,7 +65,7 @@ def get_git_status(repo_path: str) -> dict:
         changes = result.stdout.strip().split("\n") if result.stdout.strip() else []
         staged_count = sum(1 for line in changes if line.startswith(("M ", "A ", "D ", "R ")))
         unstaged_count = len(changes) - staged_count
-        
+
         return {
             "branch": branch,
             "staged": staged_count,
@@ -98,14 +97,13 @@ class GitHubAutomatorApp:
         self.token = token
         self.api = GitHubAPI(token)
         self.repos = []
-        self.local_repo_path = None  # Local Git repository path
-        self.anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")  # For AI features
-        self.status_var = tk.StringVar(value="Ready")  # Initialize early
-        self.scroll_frame = None  # For GitHub mode
-        self.canvas = None  # For GitHub mode
+        self.local_repo_path = None
+        self.anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+        self.status_var = tk.StringVar(value="Ready")
+        self.scroll_frame = None
+        self.canvas = None
 
         self._setup_window()
-        # Force window update before showing content
         self.root.update_idletasks()
         self._show_initial_choice()
 
@@ -114,39 +112,33 @@ class GitHubAutomatorApp:
         """Show user a choice: Manage remote repos or open local repo."""
         try:
             self.root.geometry("600x300")
-            
-            # Clear all existing widgets
+
             for widget in self.root.winfo_children():
                 widget.destroy()
-            
-            # Main frame
+
             main = tk.Frame(self.root, bg=BG)
             main.pack(fill="both", expand=True, padx=20, pady=20)
 
-            # Title
-            title = tk.Label(main, text="⚡ GitHub Automator", font=FONT_H,
-                            bg=BG, fg=ACCENT)
-            title.pack(pady=20)
+            tk.Label(main, text="⚡ GitHub Automator", font=FONT_H,
+                     bg=BG, fg=ACCENT).pack(pady=20)
 
-            subtitle = tk.Label(main, text="What would you like to do?", 
-                               font=FONT, bg=BG, fg=FG)
-            subtitle.pack(pady=10)
+            tk.Label(main, text="What would you like to do?",
+                     font=FONT, bg=BG, fg=FG).pack(pady=10)
 
-            # Buttons in a simple vertical layout
             btn1 = tk.Button(main, text="🌐 Manage GitHub Repositories",
-                           command=self._show_github_mode,
-                           bg=ACCENT, fg="white", font=FONT_B,
-                           relief="flat", padx=20, pady=15, cursor="hand2",
-                           activebackground=ACCENT_H, activeforeground="white")
+                             command=self._show_github_mode,
+                             bg=ACCENT, fg="white", font=FONT_B,
+                             relief="flat", padx=20, pady=15, cursor="hand2",
+                             activebackground=ACCENT_H, activeforeground="white")
             btn1.pack(fill="x", pady=10)
 
             btn2 = tk.Button(main, text="💻 Work with Local Repository",
-                           command=self._show_local_mode,
-                           bg=SUCCESS, fg="white", font=FONT_B,
-                           relief="flat", padx=20, pady=15, cursor="hand2",
-                           activebackground="#5ac05a", activeforeground="white")
+                             command=self._show_local_mode,
+                             bg=SUCCESS, fg="white", font=FONT_B,
+                             relief="flat", padx=20, pady=15, cursor="hand2",
+                             activebackground="#5ac05a", activeforeground="white")
             btn2.pack(fill="x", pady=10)
-            
+
         except Exception as e:
             print(f"Error in _show_initial_choice: {e}")
             import traceback
@@ -160,17 +152,14 @@ class GitHubAutomatorApp:
 
     def _show_local_mode(self):
         """Switch to local repository manager."""
-        # Ask user to select a folder
         folder = filedialog.askdirectory(title="Select folder to work with")
         if not folder:
             return
 
         if is_git_repo(folder):
-            # Repository already exists
             self.local_repo_path = folder
             self._build_local_ui()
         else:
-            # Not a git repo - offer options
             choice = messagebox.askyesnocancel(
                 "Not a Git Repository",
                 "This folder is not a Git repository.\n\n"
@@ -179,12 +168,12 @@ class GitHubAutomatorApp:
                 "Cancel: Go back",
                 icon="question"
             )
-            
-            if choice is None:  # Cancel
+
+            if choice is None:
                 self._show_initial_choice()
-            elif choice:  # Initialize new
+            elif choice:
                 self._init_git_repo(folder)
-            else:  # Clone
+            else:
                 self._clone_to_folder(folder)
 
     def _init_git_repo(self, folder):
@@ -192,16 +181,14 @@ class GitHubAutomatorApp:
         def task():
             try:
                 subprocess.run(["git", "init"], cwd=folder, capture_output=True, timeout=5)
-                subprocess.run(["git", "config", "user.name", "Automator"], 
-                              cwd=folder, capture_output=True, timeout=5)
+                subprocess.run(["git", "config", "user.name", "Automator"],
+                               cwd=folder, capture_output=True, timeout=5)
                 subprocess.run(["git", "config", "user.email", "automator@github.local"],
-                              cwd=folder, capture_output=True, timeout=5)
-                # Build UI first, then set status
+                               cwd=folder, capture_output=True, timeout=5)
                 self.root.after(0, lambda: (
                     setattr(self, "local_repo_path", folder),
                     self._build_local_ui()
                 ))
-                # Now set status after UI is built
                 self.root.after(100, lambda: self._set_status("✅ Repository initialized!"))
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
@@ -214,17 +201,15 @@ class GitHubAutomatorApp:
         if not url:
             self._show_initial_choice()
             return
-        
+
         def task():
             try:
-                subprocess.run(["git", "clone", url, folder], 
-                              capture_output=True, timeout=60)
-                # Build UI first
+                subprocess.run(["git", "clone", url, folder],
+                               capture_output=True, timeout=60)
                 self.root.after(0, lambda: (
                     setattr(self, "local_repo_path", folder),
                     self._build_local_ui()
                 ))
-                # Then set status
                 self.root.after(100, lambda: self._set_status("✅ Clone complete!"))
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
@@ -235,7 +220,7 @@ class GitHubAutomatorApp:
     def _build_local_ui(self):
         """Build UI for local repository management."""
         self.root.geometry("800x700")
-        
+
         for widget in self.root.winfo_children():
             widget.destroy()
 
@@ -248,12 +233,11 @@ class GitHubAutomatorApp:
 
         tk.Label(left_header, text="💻 Local Repository", font=FONT_H,
                  bg=BG2, fg=SUCCESS).pack(side="left")
-        
-        self.lbl_repo_status = tk.Label(left_header, text="Loading...", 
+
+        self.lbl_repo_status = tk.Label(left_header, text="Loading...",
                                         font=FONT_S, bg=BG2, fg=FG)
         self.lbl_repo_status.pack(side="left", padx=10)
 
-        # Back button
         back_btn_frame = tk.Frame(header, bg=BG2)
         back_btn_frame.pack(side="right", padx=16)
         self._btn(back_btn_frame, "← Back", self._show_initial_choice,
@@ -263,7 +247,7 @@ class GitHubAutomatorApp:
         status_frame = tk.Frame(self.root, bg=BG2, padx=14, pady=10)
         status_frame.pack(fill="x")
 
-        tk.Label(status_frame, text=f"📁 {self.local_repo_path}", 
+        tk.Label(status_frame, text=f"📁 {self.local_repo_path}",
                  font=FONT_S, bg=BG2, fg="#888888").pack(anchor="w")
 
         # ── Git Status Display ──
@@ -313,7 +297,7 @@ class GitHubAutomatorApp:
         status_bar = tk.Frame(self.root, bg=BG2, pady=5)
         status_bar.pack(fill="x", side="bottom")
         self.lbl_status = tk.Label(status_bar, textvariable=self.status_var,
-                                    font=FONT_S, bg=BG2, fg=FG, anchor="w")
+                                   font=FONT_S, bg=BG2, fg=FG, anchor="w")
         self.lbl_status.pack(side="left", padx=12)
 
         self._refresh_local_status()
@@ -330,12 +314,11 @@ class GitHubAutomatorApp:
 
     def _display_git_status(self, status):
         """Display Git status information."""
-        # Clear and rebuild status frame
         for w in self.git_status_frame.winfo_children():
             w.destroy()
 
         if "error" in status:
-            tk.Label(self.git_status_frame, text=f"❌ {status['error']}", 
+            tk.Label(self.git_status_frame, text=f"❌ {status['error']}",
                      font=FONT_S, bg=BG2, fg=DANGER).pack(anchor="w")
             return
 
@@ -347,7 +330,6 @@ class GitHubAutomatorApp:
         status_text = f"Branch: {branch}  |  Staged: {staged}  |  Unstaged: {unstaged}  |  Total changes: {total}"
         self.lbl_repo_status.config(text=status_text)
 
-        # Display changed files
         for w in self.changes_scroll_frame.winfo_children():
             w.destroy()
 
@@ -360,7 +342,7 @@ class GitHubAutomatorApp:
         for change in changes:
             status_char = change[0]
             filename = change[3:]
-            
+
             if status_char == "M":
                 color = "#ffa500"
                 icon = "📝"
@@ -377,9 +359,9 @@ class GitHubAutomatorApp:
                 color = FG
                 icon = "?"
 
-            change_label = tk.Label(self.changes_scroll_frame, 
-                                   text=f"{icon} {filename}",
-                                   font=FONT_S, bg=BG, fg=color, anchor="w")
+            change_label = tk.Label(self.changes_scroll_frame,
+                                    text=f"{icon} {filename}",
+                                    font=FONT_S, bg=BG, fg=color, anchor="w")
             change_label.pack(fill="x", padx=10, pady=2)
 
     def _preview_changes(self):
@@ -388,8 +370,7 @@ class GitHubAutomatorApp:
             diff = get_git_diff(self.local_repo_path, staged=False)
             if not diff.strip():
                 diff = "(No changes)"
-            
-            # Create preview window
+
             preview_win = tk.Toplevel(self.root)
             preview_win.title("Preview Changes")
             preview_win.geometry("600x500")
@@ -399,13 +380,13 @@ class GitHubAutomatorApp:
                      bg=BG, fg=FG).pack(padx=10, pady=5)
 
             text_widget = scrolledtext.ScrolledText(preview_win, bg=BG2, fg=FG,
-                                                     font=("Consolas", 9), height=20)
+                                                    font=("Consolas", 9), height=20)
             text_widget.pack(fill="both", expand=True, padx=10, pady=10)
             text_widget.insert("1.0", diff)
             text_widget.config(state="disabled")
 
             tk.Button(preview_win, text="Close", command=preview_win.destroy,
-                     bg=BG3, fg=FG, font=FONT).pack(pady=10)
+                      bg=BG3, fg=FG, font=FONT).pack(pady=10)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to preview: {e}")
 
@@ -417,7 +398,6 @@ class GitHubAutomatorApp:
         commit_win.configure(bg=BG)
         commit_win.grab_set()
 
-        # Center window
         commit_win.update_idletasks()
         x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 250
         y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 225
@@ -430,15 +410,15 @@ class GitHubAutomatorApp:
         form.pack(fill="both", expand=True)
 
         tk.Label(form, text="Commit Message *", font=FONT_S, bg=BG, fg=FG).pack(anchor="w")
-        msg_text = tk.Text(form, font=FONT, bg=BG2, fg=FG, height=6, 
-                          insertbackground=FG, relief="flat", bd=6)
+        msg_text = tk.Text(form, font=FONT, bg=BG2, fg=FG, height=6,
+                           insertbackground=FG, relief="flat", bd=6)
         msg_text.pack(fill="both", expand=True, pady=(2, 10))
         msg_text.focus()
 
         tk.Label(form, text="Push to Branch", font=FONT_S, bg=BG, fg=FG).pack(anchor="w")
         branch_var = tk.StringVar(value="main")
         branch_entry = tk.Entry(form, textvariable=branch_var, font=FONT,
-                               bg=BG2, fg=FG, insertbackground=FG, relief="flat", bd=6)
+                                bg=BG2, fg=FG, insertbackground=FG, relief="flat", bd=6)
         branch_entry.pack(fill="x", pady=(2, 15))
 
         btn_frame = tk.Frame(form, bg=BG)
@@ -447,50 +427,13 @@ class GitHubAutomatorApp:
         def do_commit():
             message = msg_text.get("1.0", "end").strip()
             branch = branch_var.get().strip()
-            
+
             if not message:
                 messagebox.showerror("Error", "Commit message is required!", parent=commit_win)
                 return
 
             commit_win.destroy()
-            self._set_status("Staging changes...")
-
-            def task():
-                try:
-                    # Stage all changes
-                    subprocess.run(["git", "add", "-A"], cwd=self.local_repo_path,
-                                 capture_output=True, timeout=10)
-                    self.root.after(0, lambda: self._set_status("Committing..."))
-
-                    # Commit
-                    subprocess.run(["git", "commit", "-m", message], 
-                                 cwd=self.local_repo_path, capture_output=True, timeout=10)
-                    self.root.after(0, lambda: self._set_status("Pushing..."))
-
-                    # Push
-                    result = subprocess.run(["git", "push", "-u", "origin", branch],
-                                          cwd=self.local_repo_path, 
-                                          capture_output=True, text=True, timeout=30)
-                    
-                    if result.returncode == 0:
-                        self.root.after(0, lambda: (
-                            self._set_status(f"✅ Committed and pushed to '{branch}'!"),
-                            messagebox.showinfo("Success", f"Committed and pushed to '{branch}'!"),
-                            self._refresh_local_status()
-                        ))
-                    else:
-                        err = result.stderr.strip()
-                        self.root.after(0, lambda: (
-                            self._set_status(f"Push failed"),
-                            messagebox.showerror("Push Failed", err)
-                        ))
-                except Exception as e:
-                    self.root.after(0, lambda: (
-                        self._set_status(f"Error: {e}"),
-                        messagebox.showerror("Error", str(e))
-                    ))
-
-            threading.Thread(target=task, daemon=True).start()
+            self._perform_commit(message, branch)
 
         self._btn(btn_frame, "✓ Commit & Push", do_commit,
                   ACCENT, ACCENT_H).pack(side="left", fill="x", expand=True, padx=2)
@@ -511,21 +454,37 @@ class GitHubAutomatorApp:
 
         def task():
             try:
-                diff = get_git_diff(self.local_repo_path, staged=False)
-                if not diff.strip():
+                unstaged = get_git_diff(self.local_repo_path, staged=False)
+                staged   = get_git_diff(self.local_repo_path, staged=True)
+
+                untracked_result = subprocess.run(
+                    ["git", "ls-files", "--others", "--exclude-standard"],
+                    cwd=self.local_repo_path, capture_output=True, text=True, timeout=5
+                )
+                untracked = untracked_result.stdout.strip()
+
+                combined_diff = ""
+                if staged:
+                    combined_diff += f"=== STAGED CHANGES ===\n{staged}\n\n"
+                if unstaged:
+                    combined_diff += f"=== UNSTAGED CHANGES ===\n{unstaged}\n\n"
+                if untracked:
+                    combined_diff += f"=== NEW FILES ===\n{untracked}\n"
+
+                if not combined_diff.strip():
                     self.root.after(0, lambda: messagebox.showinfo(
-                        "No Changes", "No changes to describe."))
+                        "No Changes", "No changes found in this repository."))
                     self.root.after(0, lambda: self._set_status("Ready"))
                     return
 
-                result = generate_commit_message(diff, self.anthropic_key)
-                
+                result = generate_commit_message(combined_diff[:4000], self.anthropic_key)
+
                 if result["success"]:
                     self.root.after(0, lambda: self._show_ai_message_dialog(result["message"]))
                 else:
                     self.root.after(0, lambda: messagebox.showerror(
                         "AI Error", result.get("error", "Unknown error")))
-                
+
                 self.root.after(0, lambda: self._set_status("Ready"))
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
@@ -553,7 +512,7 @@ class GitHubAutomatorApp:
                  bg=BG, fg=FG).pack(anchor="w", padx=20)
 
         msg_text = tk.Text(msg_win, font=FONT, bg=BG2, fg=FG, height=8,
-                          insertbackground=FG, relief="flat", bd=6, wrap="word")
+                           insertbackground=FG, relief="flat", bd=6, wrap="word")
         msg_text.pack(fill="both", expand=True, padx=20, pady=(5, 15))
         msg_text.insert("1.0", ai_message)
         msg_text.focus()
@@ -572,7 +531,7 @@ class GitHubAutomatorApp:
                   BG3, "#3c3c3c").pack(side="left", fill="x", expand=True, padx=2)
 
     def _commit_with_message(self, message):
-        """Commit with provided message."""
+        """Show branch dialog then commit with provided message."""
         commit_win = tk.Toplevel(self.root)
         commit_win.title("Commit & Push")
         commit_win.geometry("500x200")
@@ -593,7 +552,7 @@ class GitHubAutomatorApp:
         tk.Label(form, text="Branch", font=FONT_S, bg=BG, fg=FG).pack(anchor="w")
         branch_var = tk.StringVar(value="main")
         branch_entry = tk.Entry(form, textvariable=branch_var, font=FONT,
-                               bg=BG2, fg=FG, insertbackground=FG, relief="flat", bd=6)
+                                bg=BG2, fg=FG, insertbackground=FG, relief="flat", bd=6)
         branch_entry.pack(fill="x", pady=(2, 15))
 
         btn_frame = tk.Frame(form, bg=BG)
@@ -610,23 +569,56 @@ class GitHubAutomatorApp:
                   BG3, "#3c3c3c").pack(side="left", fill="x", expand=True, padx=2)
 
     def _perform_commit(self, message, branch):
-        """Perform the actual commit and push."""
+        """Perform the actual commit and push with token auth."""
         self._set_status("Staging changes...")
 
         def task():
             try:
+                # Step 1: Stage all
                 subprocess.run(["git", "add", "-A"], cwd=self.local_repo_path,
-                             capture_output=True, timeout=10)
+                               capture_output=True, timeout=10)
                 self.root.after(0, lambda: self._set_status("Committing..."))
 
-                subprocess.run(["git", "commit", "-m", message],
-                             cwd=self.local_repo_path, capture_output=True, timeout=10)
+                # Step 2: Commit
+                commit_result = subprocess.run(
+                    ["git", "commit", "-m", message],
+                    cwd=self.local_repo_path,
+                    capture_output=True, text=True, timeout=10
+                )
+
+                if commit_result.returncode != 0:
+                    err = commit_result.stderr.strip() or commit_result.stdout.strip()
+                    if "nothing to commit" not in err.lower():
+                        self.root.after(0, lambda: (
+                            self._set_status("Commit failed"),
+                            messagebox.showerror("Commit Failed", err)
+                        ))
+                        return
+
                 self.root.after(0, lambda: self._set_status("Pushing..."))
 
-                result = subprocess.run(["git", "push", "-u", "origin", branch],
-                                      cwd=self.local_repo_path,
-                                      capture_output=True, text=True, timeout=30)
-                
+                # Step 3: Push with token auth injected into URL
+                remote_result = subprocess.run(
+                    ["git", "remote", "get-url", "origin"],
+                    cwd=self.local_repo_path,
+                    capture_output=True, text=True, timeout=5
+                )
+                remote_url = remote_result.stdout.strip()
+
+                if remote_url.startswith("https://") and self.token and self.token != "demo-token":
+                    auth_url = remote_url.replace("https://", f"https://{self.token}@")
+                    result = subprocess.run(
+                        ["git", "push", auth_url, f"HEAD:{branch}"],
+                        cwd=self.local_repo_path,
+                        capture_output=True, text=True, timeout=30
+                    )
+                else:
+                    result = subprocess.run(
+                        ["git", "push", "-u", "origin", branch],
+                        cwd=self.local_repo_path,
+                        capture_output=True, text=True, timeout=30
+                    )
+
                 if result.returncode == 0:
                     self.root.after(0, lambda: (
                         self._set_status(f"✅ Pushed to '{branch}'!"),
@@ -636,7 +628,7 @@ class GitHubAutomatorApp:
                 else:
                     err = result.stderr.strip()
                     self.root.after(0, lambda: (
-                        self._set_status(f"Push failed"),
+                        self._set_status("Push failed"),
                         messagebox.showerror("Push Failed", err)
                     ))
             except Exception as e:
@@ -655,7 +647,6 @@ class GitHubAutomatorApp:
         self.root.configure(bg=BG)
         self.root.resizable(True, True)
 
-        # Center on screen
         self.root.update_idletasks()
         x = (self.root.winfo_screenwidth() // 2) - 360
         y = (self.root.winfo_screenheight() // 2) - 300
@@ -663,7 +654,6 @@ class GitHubAutomatorApp:
 
     # ─── UI Builder ───────────────────────────────────────────────
     def _build_ui(self):
-        # ── Header ──
         header = tk.Frame(self.root, bg=BG2, pady=12)
         header.pack(fill="x")
 
@@ -671,22 +661,19 @@ class GitHubAutomatorApp:
                  bg=BG2, fg=ACCENT).pack(side="left", padx=16)
 
         self.lbl_user = tk.Label(header, text="Loading...", font=FONT_S,
-                                  bg=BG2, fg=FG)
+                                 bg=BG2, fg=FG)
         self.lbl_user.pack(side="right", padx=16)
 
-        # ── Action Buttons Row ──
         btn_frame = tk.Frame(self.root, bg=BG, pady=10, padx=14)
         btn_frame.pack(fill="x")
 
-        self._btn(btn_frame, "Create Repo",  self._create_repo,  ACCENT,   ACCENT_H).pack(side="left", padx=4)
-        self._btn(btn_frame, "Clone Repo",    self._clone_repo,   "#5a5a8a", "#6a6a9a").pack(side="left", padx=4)
-        self._btn(btn_frame, "Refresh",        self._load_repos,   BG3,       "#3c3c3c").pack(side="left", padx=4)
+        self._btn(btn_frame, "Create Repo", self._create_repo, ACCENT, ACCENT_H).pack(side="left", padx=4)
+        self._btn(btn_frame, "Clone Repo", self._clone_repo, "#5a5a8a", "#6a6a9a").pack(side="left", padx=4)
+        self._btn(btn_frame, "Refresh", self._load_repos, BG3, "#3c3c3c").pack(side="left", padx=4)
 
-        # ── Repo List Label ──
         tk.Label(self.root, text="  Repositories", font=FONT_B,
                  bg=BG, fg=FG, anchor="w").pack(fill="x", padx=14)
 
-        # ── Repo List (Canvas + Scrollbar) ──
         list_frame = tk.Frame(self.root, bg=BG)
         list_frame.pack(fill="both", expand=True, padx=14, pady=(4, 0))
 
@@ -703,16 +690,14 @@ class GitHubAutomatorApp:
         scrollbar.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
 
-        # Mousewheel scroll
         self.canvas.bind_all("<MouseWheel>",
             lambda e: self.canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
 
-        # ── Status Bar ──
         self.status_var = tk.StringVar(value="Ready")
         status_bar = tk.Frame(self.root, bg=BG2, pady=5)
         status_bar.pack(fill="x", side="bottom")
         self.lbl_status = tk.Label(status_bar, textvariable=self.status_var,
-                                    font=FONT_S, bg=BG2, fg=FG, anchor="w")
+                                   font=FONT_S, bg=BG2, fg=FG, anchor="w")
         self.lbl_status.pack(side="left", padx=12)
 
     def _btn(self, parent, text, cmd, bg, hover_bg, danger=False):
@@ -770,28 +755,131 @@ class GitHubAutomatorApp:
         for widget in self.scroll_frame.winfo_children():
             widget.destroy()
 
-    def _repo_card(self, repo):
-        name        = repo.get("name", "")
-        desc        = repo.get("description") or "No description"
-        is_private  = repo.get("private", False)
-        language    = repo.get("language") or "N/A"
-        url         = repo.get("html_url", "")
-        clone_url   = repo.get("clone_url", "")
+    # ─── NEW: VS Code Open ────────────────────────────────────────
+    def _open_in_vscode(self, folder_path: str):
+        """Open a folder in VS Code using the 'code' CLI command."""
+        try:
+            subprocess.Popen(
+                ["code", folder_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                shell=(os.name == 'nt')  # Windows pe shell=True zaroori hai
+            )
+            self._set_status(f"📂 Opened in VS Code: {folder_path}")
+        except FileNotFoundError:
+            messagebox.showwarning(
+                "VS Code Not Found",
+                f"VS Code automatically open nahi ho saka.\n\n"
+                f"Folder yahan hai:\n{folder_path}\n\n"
+                f"Fix: VS Code mein Ctrl+Shift+P → 'Shell Command: Install code command in PATH'"
+            )
+        except Exception as e:
+            messagebox.showerror("Error", f"VS Code open karne mein error: {e}")
 
-        # Card frame
+    # ─── NEW: Smart Open Repo ─────────────────────────────────────
+    def _smart_open_repo(self, clone_url: str, repo_name: str):
+        """
+        Smart open logic:
+        1. Pehle check karo kya repo system pe already cloned hai.
+        2. Agar mila → seedha VS Code mein open karo (clone mat karo).
+        3. Agar nahi mila → folder select karo, clone karo, phir VS Code mein open karo.
+        """
+        home = os.path.expanduser("~")
+
+        # Common locations jahan repos clone hote hain
+        search_dirs = [
+            home,
+            os.path.join(home, "Desktop"),
+            os.path.join(home, "Documents"),
+            os.path.join(home, "Projects"),
+            os.path.join(home, "repos"),
+            os.path.join(home, "code"),
+            os.path.join(home, "source"),
+            os.path.join(home, "dev"),
+            # Windows specific
+            os.path.join("C:\\", "Users", os.getlogin() if os.name == 'nt' else "", "source", "repos"),
+        ]
+
+        found_path = None
+
+        for base in search_dirs:
+            if not os.path.isdir(base):
+                continue
+            candidate = os.path.join(base, repo_name)
+            if os.path.isdir(candidate) and is_git_repo(candidate):
+                # Remote URL se verify karo ke same repo hai
+                try:
+                    result = subprocess.run(
+                        ["git", "remote", "get-url", "origin"],
+                        cwd=candidate, capture_output=True, text=True, timeout=5
+                    )
+                    remote = result.stdout.strip()
+                    # repo_name URL mein match karo (token-injected URLs bhi handle honge)
+                    if repo_name.lower() in remote.lower():
+                        found_path = candidate
+                        break
+                except Exception:
+                    pass
+
+        if found_path:
+            # ✅ Repo pehle se cloned hai — seedha VS Code mein open karo
+            self._set_status(f"✅ Existing clone found: {found_path}")
+            messagebox.showinfo(
+                "Repo Found!",
+                f"'{repo_name}' already cloned hai:\n{found_path}\n\nVS Code mein open ho raha hai..."
+            )
+            self._open_in_vscode(found_path)
+        else:
+            # ✅ Clone nahi mila — pehle clone karo, phir VS Code mein open karo
+            dest = filedialog.askdirectory(title=f"'{repo_name}' kahan clone karein?")
+            if not dest:
+                return
+
+            dest_path = os.path.join(dest, repo_name)
+            self._set_status(f"Cloning '{repo_name}'...")
+
+            def task():
+                try:
+                    auth_url = clone_url.replace("https://", f"https://{self.token}@")
+                    result = subprocess.run(
+                        ["git", "clone", auth_url, dest_path],
+                        capture_output=True, text=True, timeout=60
+                    )
+                    if result.returncode == 0:
+                        self.root.after(0, lambda: self._set_status(f"✅ Cloned: {dest_path}"))
+                        # Clone complete → VS Code mein open karo
+                        self.root.after(0, lambda: self._open_in_vscode(dest_path))
+                    else:
+                        err = result.stderr.strip()
+                        self.root.after(0, lambda: self._set_status("Clone failed."))
+                        self.root.after(0, lambda: messagebox.showerror("Clone Failed", err))
+                except FileNotFoundError:
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Error", "git installed nahi hai ya PATH mein nahi."))
+                except Exception as e:
+                    self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+
+            threading.Thread(target=task, daemon=True).start()
+
+    # ─── Repo Card ────────────────────────────────────────────────
+    def _repo_card(self, repo):
+        name       = repo.get("name", "")
+        desc       = repo.get("description") or "No description"
+        is_private = repo.get("private", False)
+        language   = repo.get("language") or "N/A"
+        url        = repo.get("html_url", "")
+        clone_url  = repo.get("clone_url", "")
+
         card = tk.Frame(self.scroll_frame, bg=BG2, pady=8, padx=10,
                         highlightbackground=BORDER, highlightthickness=1)
         card.pack(fill="x", pady=3, padx=2)
 
-        # Left accent bar
         accent = tk.Frame(card, bg=ACCENT, width=3)
         accent.pack(side="left", fill="y", padx=(0, 10))
 
-        # Info
         info = tk.Frame(card, bg=BG2)
         info.pack(side="left", fill="both", expand=True)
 
-        # Name + badges
         name_row = tk.Frame(info, bg=BG2)
         name_row.pack(fill="x")
 
@@ -803,14 +891,18 @@ class GitHubAutomatorApp:
         tk.Label(info, text=desc, font=FONT_S, bg=BG2, fg="#888888",
                  anchor="w", wraplength=400, justify="left").pack(fill="x")
 
-        # Action buttons
         actions = tk.Frame(card, bg=BG2)
         actions.pack(side="right", padx=6)
 
-        self._btn(actions, "Open", lambda u=url: self._open_url(u),
+        # ✅ NEW: "📂 Open" button — smart open (existing clone detect kare ya clone karke VS Code mein open kare)
+        self._btn(actions, "📂 Open", lambda cu=clone_url, n=name: self._smart_open_repo(cu, n),
+                  "#2d7a4f", "#3a9a62").pack(side="left", padx=2)
+
+        # 🌐 GitHub button — browser mein open kare (pehle wala "Open" button)
+        self._btn(actions, "🌐 GitHub", lambda u=url: self._open_url(u),
                   BG3, "#3c3c3c").pack(side="left", padx=2)
-        self._btn(actions, "Clone", lambda cu=clone_url, n=name: self._clone_specific(cu, n),
-                  "#5a5a8a", "#6a6a9a").pack(side="left", padx=2)
+
+        # 🗑 Delete button
         self._btn(actions, "Delete", lambda n=name: self._delete_repo(n),
                   DANGER, DANGER_H).pack(side="left", padx=2)
 
@@ -827,7 +919,6 @@ class GitHubAutomatorApp:
         win.resizable(False, False)
         win.grab_set()
 
-        # Center
         win.update_idletasks()
         x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 225
         y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 250
@@ -836,42 +927,36 @@ class GitHubAutomatorApp:
         tk.Label(win, text="⚡ Create New Repository", font=FONT_H,
                  bg=BG, fg=ACCENT).pack(pady=(16, 10))
 
-        # Scrollable form
         canvas = tk.Canvas(win, bg=BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
         form = tk.Frame(canvas, bg=BG, padx=20, pady=10)
-        
+
         form.bind("<Configure>",
             lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
 
         canvas.create_window((0, 0), window=form, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
-        
+
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True, padx=10, pady=10)
 
-        # ── Form Fields ──
         tk.Label(form, text="Repository Name *", font=FONT_S, bg=BG, fg=FG).pack(anchor="w")
         name_var = tk.StringVar()
         name_entry = tk.Entry(form, textvariable=name_var, font=FONT,
-                 bg=BG2, fg=FG, insertbackground=FG,
-                 relief="flat", bd=6)
+                              bg=BG2, fg=FG, insertbackground=FG, relief="flat", bd=6)
         name_entry.pack(fill="x", pady=(2, 10))
         name_entry.focus()
 
         tk.Label(form, text="Description (optional)", font=FONT_S, bg=BG, fg=FG).pack(anchor="w")
         desc_var = tk.StringVar()
         tk.Entry(form, textvariable=desc_var, font=FONT,
-                 bg=BG2, fg=FG, insertbackground=FG,
-                 relief="flat", bd=6).pack(fill="x", pady=(2, 10))
+                 bg=BG2, fg=FG, insertbackground=FG, relief="flat", bd=6).pack(fill="x", pady=(2, 10))
 
         tk.Label(form, text="Topics (comma-separated, optional)", font=FONT_S, bg=BG, fg=FG).pack(anchor="w")
         topics_var = tk.StringVar()
         tk.Entry(form, textvariable=topics_var, font=FONT,
-                 bg=BG2, fg=FG, insertbackground=FG,
-                 relief="flat", bd=6).pack(fill="x", pady=(2, 10))
+                 bg=BG2, fg=FG, insertbackground=FG, relief="flat", bd=6).pack(fill="x", pady=(2, 10))
 
-        # ── Checkboxes ──
         opts_frame = tk.Frame(form, bg=BG)
         opts_frame.pack(fill="x", pady=8)
 
@@ -900,7 +985,6 @@ class GitHubAutomatorApp:
                        bg=BG, fg=FG, selectcolor=BG2, activebackground=BG,
                        activeforeground=FG, font=FONT).pack(anchor="w", pady=2)
 
-        # ── Buttons Frame ──
         btn_frame = tk.Frame(form, bg=BG)
         btn_frame.pack(fill="x", pady=(12, 0))
 
@@ -1019,7 +1103,6 @@ class GitHubAutomatorApp:
         if not dest:
             return
 
-        import os
         dest_path = os.path.join(dest, repo_name)
         self._set_status(f"Cloning '{repo_name}'...")
 
@@ -1036,7 +1119,7 @@ class GitHubAutomatorApp:
                         "Cloned!", f"'{repo_name}' cloned to:\n{dest_path}"))
                 else:
                     err = result.stderr.strip()
-                    self.root.after(0, lambda: self._set_status(f"Clone failed."))
+                    self.root.after(0, lambda: self._set_status("Clone failed."))
                     self.root.after(0, lambda: messagebox.showerror("Clone Failed", err))
             except FileNotFoundError:
                 self.root.after(0, lambda: messagebox.showerror(
@@ -1057,15 +1140,13 @@ class GitHubAutomatorApp:
 # ─── Entry Point ──────────────────────────────────────────────────
 if __name__ == "__main__":
     token = ""
-    
+
     try:
-        # Try to read JSON from stdin if available
         stdin_data = sys.stdin.read().strip()
         if stdin_data:
             args = json.loads(stdin_data)
             token = args.get("token", "")
     except:
-        # If no stdin or invalid JSON, continue with empty token (local mode only)
         pass
 
     root = tk.Tk()

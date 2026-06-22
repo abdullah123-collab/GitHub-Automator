@@ -56,6 +56,11 @@
         "command": "github-automator.aiGenerate",
         "title": "GitHub Automator: ✨ AI Generate Commit Message",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "github-automator.setAnthropicKey",
+        "title": "GitHub Automator: Set Anthropic API Key",
+        "icon": "$(key)"
       }
     ],
     "menus": {

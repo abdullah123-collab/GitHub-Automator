@@ -70,7 +70,7 @@ def get_diff(repo_path: str, staged: bool = False) -> Tuple[bool, str]:
     # Also grab untracked file names for context
     _, status = _run(["git", "status", "--short"], cwd=repo_path)
     combined = f"{status}\n\n{diff}"
-    return True, combined[:4000]  # Trim for AI prompt
+    return True, combined[:4000]
 
 
 def stage_all(repo_path: str) -> Tuple[bool, str]:
@@ -85,9 +85,42 @@ def commit(repo_path: str, message: str) -> Tuple[bool, str]:
     return _run(["git", "commit", "-m", message], cwd=repo_path)
 
 
+def pull(repo_path: str) -> Tuple[bool, str]:
+    """
+    Run git pull to fetch and merge remote changes.
+    Returns (success: bool, message: str)
+    """
+    ok, msg = _run(["git", "pull"], cwd=repo_path, timeout=60)
+    
+    if not ok and "conflict" in msg.lower():
+        conflict_ok, conflict_files = _run(["git", "diff", "--name-only", "--diff-filter=U"], cwd=repo_path)
+        if conflict_ok and conflict_files:
+            return False, f"Merge conflicts in: {conflict_files}. Please manually resolve conflicts in VS Code, then commit and push. Or run 'git merge --abort' to cancel the merge."
+        else:
+            return False, f"Merge conflicts detected. Please manually resolve conflicts in VS Code, then commit and push. Or run 'git merge --abort' to cancel the merge."
+    
+    return ok, msg
+
+
 def push(repo_path: str) -> Tuple[bool, str]:
-    """Run git push."""
-    return _run(["git", "push"], cwd=repo_path, timeout=60)
+    """
+    Run git push. If rejected due to remote changes, automatically pull and retry.
+    Returns (success: bool, message: str)
+    """
+    ok, msg = _run(["git", "push"], cwd=repo_path, timeout=60)
+    
+    if not ok and ("rejected" in msg.lower() or "fetch first" in msg.lower()):
+        pull_ok, pull_msg = pull(repo_path)
+        if pull_ok:
+            retry_ok, retry_msg = _run(["git", "push"], cwd=repo_path, timeout=60)
+            if retry_ok:
+                return True, "Pulled remote changes and pushed successfully"
+            else:
+                return False, f"Pulled changes but push still failed: {retry_msg}"
+        else:
+            return False, f"Failed to pull remote changes: {pull_msg}. Please resolve conflicts manually and try again."
+    
+    return ok, msg
 
 
 def stage_commit_push(repo_path: str, message: str) -> dict:
@@ -112,15 +145,30 @@ def stage_commit_push(repo_path: str, message: str) -> dict:
     ok, msg = commit(repo_path, message)
     result["commit"] = {"ok": ok, "msg": msg}
     if not ok:
-        # "nothing to commit" is a soft failure — don't abort
+        # ✅ FIXED: "nothing to commit" — still try to push unpushed commits
         if "nothing to commit" in msg.lower():
             result["commit"]["msg"] = "Nothing to commit — working tree clean."
+            ok, msg = push(repo_path)
+            result["push"] = {"ok": ok, "msg": msg}
+            result["success"] = ok
+            if ok:
+                result["message"] = "✅ Nothing new to commit, pushed existing commits successfully."
+            else:
+                result["message"] = f"Nothing new to commit, and push failed: {msg}"
         return result
 
-    # Step 3: Push
+    # Step 3: Push (with auto-pull on conflict)
     ok, msg = push(repo_path)
     result["push"] = {"ok": ok, "msg": msg}
     result["success"] = ok
+    
+    if ok:
+        if "Pulled" in msg:
+            result["message"] = "✅ Changes committed and pushed! (Pulled remote changes first)"
+        else:
+            result["message"] = "✅ Changes staged, committed, and pushed successfully"
+    else:
+        result["message"] = msg
 
     return result
 
@@ -145,12 +193,18 @@ if __name__ == "__main__":
     
     try:
         if action == "commit_and_push":
+            if not is_git_repo(repo_path):
+                print(json.dumps({
+                    "success": False,
+                    "message": f"Not a git repository at {repo_path}. Run 'Initialize Git' first or open a git repo."
+                }))
+                sys.exit(0)
+            
             message = args.get("message", "")
             use_ai = args.get("use_ai", False)
             
-            # If no message and use_ai is true, generate one
             if not message and use_ai:
-                from ai_commit import generate_commit_message
+                from services.ai_commit import generate_commit_message
                 ok, diff = get_diff(repo_path)
                 if ok:
                     ai_result = generate_commit_message(diff, "")
@@ -167,7 +221,7 @@ if __name__ == "__main__":
             result = stage_commit_push(repo_path, message)
             print(json.dumps({
                 "success": result["success"],
-                "message": f"Staged: {result['stage']['msg']} | Committed | Pushed" if result["success"] else result["push"]["msg"],
+                "message": result.get("message", (f"Staged | Committed | Pushed" if result["success"] else result["push"]["msg"])),
                 "details": result
             }))
         else:

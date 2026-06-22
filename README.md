@@ -1,89 +1,80 @@
-# GitHub Automator — VS Code Extension + GUI
+# GitHub Automator - VS Code Extension
 
-A VS Code extension to automate GitHub workflows using a **JS/TS + Python hybrid** architecture, plus a **standalone Tkinter GUI** for advanced Git automation.
+A powerful VS Code extension that automates GitHub workflows with AI-powered commit messages and intelligent repository management.
 
-## 🆕 New: Standalone GUI Application
+## Features
 
-The application now includes a powerful GUI for both GitHub and local Git management:
+- **GitHub Authentication** - Secure OAuth integration for GitHub API access
+- **Repository Management** - Clone, switch, and manage multiple local repositories
+- **Auto Commit & Push** - Automated commit creation and push with optional merge conflict detection
+- **AI-Powered Commit Messages** - Generate intelligent, contextual commit messages using Claude API
+- **Merge Conflict Resolution** - Detect and guide resolution of merge conflicts
+- **Local Repository Support** - Full support for local repository workflows without cloud dependency
 
-### **Dual-Mode Interface**
-- **🌐 GitHub Manager**: Remote repository operations (create, clone, delete)
-- **💻 Local Repository Manager**: Advanced local Git automation
+## Tech Stack
 
-### **Key Features (Local Mode)**
-- ✅ **Commit & Push**: One-click workflow (stage → commit → push)
-- ✨ **AI Generate Commits**: Auto-create professional commit messages using Claude AI
-- 📝 **Preview Changes**: Review diffs before committing
-- 📊 **Real-Time Status**: Monitor branch and file changes
-- 🔍 **Auto-Detect Repos**: Automatically detect existing .git directories
+- **Frontend**: JavaScript, VS Code Extension API
+- **Backend**: Python, GitHub API
+- **AI Integration**: Anthropic Claude API
+- **Build**: npm (Node.js)
 
-### **Quick Start**
-```bash
-cd python-backend
-python gui.py
-```
+## Installation
 
-See **QUICKSTART.md** and **FEATURES.md** for detailed usage.
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/github-automator.git
+   cd github-automator
+   ```
 
----
+2. Install dependencies:
+   ```bash
+   # Backend
+   pip install -r backend/requirements.txt
 
-## Original Architecture
+   # Extension
+   cd extension
+   npm install
+   ```
 
-## Architecture
+3. Set up environment variables:
+   ```bash
+   cp .env.example .env
+   # Add your GitHub and Anthropic API keys to .env
+   ```
+
+4. Launch the extension:
+   - Open the `extension/` folder in VS Code
+   - Press `F5` to run the extension in debug mode
+
+## Status
+
+**In Development** - Phase 3 Complete
+
+Current capabilities include core GitHub integration, AI-powered commit messages, and local repository support. Additional features and enhancements are in active development.
+
+## Documentation
+
+- [Architecture Overview](docs/ARCHITECTURE.md)
+- [Features Guide](docs/FEATURES.md)
+- [Getting Started](docs/GETTING_STARTED.md)
+- [API Reference](docs/API/SMART_REPO_IMPLEMENTATION.md)
+- [Changelog](docs/CHANGELOG/CHANGES.md)
+
+## Project Structure
 
 ```
 github-automator/
-├── extension/               ← VS Code Extension (JavaScript)
-│   ├── src/
-│   │   ├── extension.js     ← Main entry point, commands, webview
-│   │   └── pythonBridge.js  ← Spawns Python scripts, handles I/O
-│   └── package.json
-│
-└── python-backend/          ← Python Logic Layer
-    ├── auth.py              ← Token validation
-    ├── github_api.py        ← Reusable GitHub API class
-    └── requirements.txt
+├── backend/          # Python backend services
+├── extension/        # VS Code extension source
+├── docs/            # Documentation
+├── tests/           # Test files
+└── scripts/         # Utility scripts
 ```
 
-## How the Bridge Works
+## License
 
-1. VS Code extension receives a user action
-2. `pythonBridge.js` spawns a Python script via `child_process.spawn`
-3. Args are passed as JSON via **stdin**
-4. Python processes and returns JSON via **stdout**
-5. Extension reads the result and updates the UI
+[Add your license here]
 
-## Phase 1 Features
-- GitHub Personal Access Token authentication
-- Token stored securely in VS Code Secrets
-- Session auto-restored on startup
-- Webview panel: view profile + list repos
-- Python bridge ready for all future phases
+## Contributing
 
-## Setup
-
-### Extension
-```bash
-cd extension
-npm install
-# Press F5 in VS Code to launch Extension Development Host
-```
-
-### Python Backend
-```bash
-cd python-backend
-pip install -r requirements.txt   # nothing needed for Phase 1
-python3 auth.py                    # test: paste JSON via stdin
-```
-
-## Phases Roadmap
-| Phase | Feature |
-|-------|---------|
-| ✅ 1 | Foundation, Auth, Python Bridge |
-| 2 | Repo Management (create/delete/clone) |
-| 3 | Auto Commit & Push |
-| 4 | AI Commit Message Generator |
-| 5 | AI README Generator |
-| 6 | GitHub Actions / CI-CD Triggers |
-| 7 | Issues & PR Automation |
-| 8 | Polish & Packaging |
+[Add contribution guidelines here]
