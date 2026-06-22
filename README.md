@@ -89,10 +89,4 @@ github-automator/
 └── scripts/         # Utility scripts
 ```
 
-## License
 
-[Add your license here]
-
-## Contributing
-
-[Add contribution guidelines here]
