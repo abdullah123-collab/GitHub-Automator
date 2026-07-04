@@ -112,12 +112,14 @@
       "github-automator": [
         {
           "id": "github-automator.repoView",
-          "name": "Repositories"
+          "name": "Repositories",
+          "type": "webview"
         },
         {
           "id": "github-automator.actionsView",
           "name": "Git Actions",
-          "type": "webview"
+          "type": "webview",
+          "when": "githubAutomator.authenticated"
         }
       ]
     }

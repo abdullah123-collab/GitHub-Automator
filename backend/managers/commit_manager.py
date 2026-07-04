@@ -224,6 +224,12 @@ if __name__ == "__main__":
                 "message": result.get("message", (f"Staged | Committed | Pushed" if result["success"] else result["push"]["msg"])),
                 "details": result
             }))
+        elif action == "get_diff":
+            ok, diff = get_diff(repo_path)
+            if ok:
+                print(json.dumps({"success": True, "diff": diff}))
+            else:
+                print(json.dumps({"success": False, "message": diff}))
         else:
             print(json.dumps({"success": False, "error": f"Unknown action: {action}"}))
     except Exception as e:
