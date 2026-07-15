@@ -157,7 +157,10 @@ class RepositoriesWebviewProvider {
       <body>
         <div class="shell">
           <div class="header">
-            <div class="title">Repositories</div>
+            <div style="display:flex;align-items:center;gap:12px;">
+              <div class="title">Repositories</div>
+              <input id="repoSearch" placeholder="🔍 Search repositories..." style="padding:6px 8px;border-radius:4px;background:#1e1e1e;border:1px solid #3c3c3c;color:var(--vscode-input-foreground);" />
+            </div>
             <div class="muted">${state.workspace || 'Workspace'}</div>
           </div>
           ${reposHtml}
@@ -173,6 +176,20 @@ class RepositoriesWebviewProvider {
           function refresh() { post('refreshRepos'); }
           function commitAndPush() { post('commitAndPush'); }
           function aiGenerate() { post('aiGenerate'); }
+
+          // Client-side filtering for repo cards
+          document.addEventListener('DOMContentLoaded', () => {
+            const input = document.getElementById('repoSearch');
+            if (!input) return;
+            input.addEventListener('input', () => {
+              const q = (input.value || '').toLowerCase().trim();
+              document.querySelectorAll('.repo-card').forEach(c => {
+                const name = (c.querySelector('.repo-name') && c.querySelector('.repo-name').innerText.toLowerCase()) || '';
+                const desc = (c.querySelector('.muted') && c.querySelector('.muted').innerText.toLowerCase()) || '';
+                c.style.display = (!q || name.includes(q) || desc.includes(q)) ? '' : 'none';
+              });
+            });
+          });
         </script>
       </body>
       </html>`;
@@ -197,13 +214,14 @@ class RepositoriesWebviewProvider {
     const stars = repo.stargazers_count ? `<span class="pill">⭐ ${repo.stargazers_count}</span>` : '';
     const repoName = (repo.name || 'Repository').replace(/'/g, "\\'");
     const cloneUrl = (repo.clone_url || '').replace(/'/g, "\\'");
-    return `<div class="repo-card">
+    const activeClass = (repo.name && repo.name === this.state.workspace) ? ' active' : '';
+    return `<div class="repo-card${activeClass}">
       <div class="repo-header">
         <div class="repo-title-group">
           <div class="repo-name">${repo.name || 'Repository'}</div>
           <span class="pill">${visibility}</span>
         </div>
-        <button class="repo-action" onclick="post('openRepo', { repoName: '${repoName}', cloneUrl: '${cloneUrl}' })" title="Open local repository">+</button>
+        <button class="repo-action" onclick="post('openRepo', { repoName: '${repoName}', cloneUrl: '${cloneUrl}' })" title="Open local repository">📂</button>
       </div>
       <div class="muted">${description}</div>
       <div class="repo-meta">
@@ -266,22 +284,28 @@ class ActionsWebviewProvider {
           .actions { display: flex; flex-direction: column; gap: 8px; }
           button { width: 100%; padding: 8px 10px; border: none; border-radius: 4px; color: white; cursor: pointer; font-weight: 600; }
           .primary { background: #0e639c; }
-          .secondary { background: #7b61ff; }
           .muted { color: var(--vscode-descriptionForeground); font-size: 11px; font-style: italic; margin-top: 6px; }
+          textarea { width:100%; min-height:80px; padding:8px; border-radius:6px; background:#1e1e1e; border:1px solid #3c3c3c; color:var(--vscode-input-foreground); }
+          .inline-actions { display:flex; gap:8px; align-items:center; }
+          .ai-btn { background:transparent; border:1px solid #3c3c3c; color:var(--vscode-foreground); padding:6px 8px; border-radius:6px; cursor:pointer; }
+          .loading { box-shadow: 0 0 0 3px rgba(0,120,212,0.12); animation: pulse 1s infinite; }
+          @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(0,120,212,0.12);} 70% { box-shadow:0 0 0 6px rgba(0,120,212,0);} 100% { box-shadow:0 0 0 0 rgba(0,120,212,0);} }
         </style>
       </head>
       <body>
         <div class="card">
           <div class="header">🗂️ GIT ACTIONS</div>
           <div class="actions">
-            <button class="primary" onclick="post('commitAndPush')">⚡ Commit & Push</button>
-            <button class="secondary" onclick="post('aiGenerate')">✨ AI Generate Message</button>
-            <div class="muted">Tip: Use AI Generate to automatically create professional commit messages based on your changes.</div>
+            <button class="primary" id="commitBtn">⚡ Commit & Push</button>
+            <div class="muted">Use the native input box to review and edit your commit message before pushing.</div>
           </div>
         </div>
         <script>
           const vscode = acquireVsCodeApi();
-          function post(command) { vscode.postMessage({ command }); }
+          function post(command, payload) { vscode.postMessage({ command, payload }); }
+          document.getElementById('commitBtn').addEventListener('click', () => {
+            post('commitAndPush');
+          });
         </script>
       </body>
       </html>`;
@@ -627,7 +651,7 @@ async function initializeRepoCommand() {
   }
 }
 
-async function commitAndPushCommand() {
+async function commitAndPushCommand(payload) {
   try {
     const repoPath = getWorkspacePath();
     if (!repoPath) {
@@ -635,23 +659,115 @@ async function commitAndPushCommand() {
       return;
     }
 
-    const message = await vscode.window.showInputBox({ prompt: 'Commit message (leave empty for AI-generated message)', ignoreFocusOut: true });
-    const token = await getStoredSecret(AUTH_SECRET_KEY);
-    const announcement = await runBackendScript('managers/commit_manager.py', {
-      action: 'commit_and_push',
-      repo_path: repoPath,
-      message: message || '',
-      use_ai: true,
-      api_key: token || ''
-    });
+    const inputBox = vscode.window.createInputBox();
+    inputBox.title = 'Commit & Push';
+    inputBox.prompt = 'Enter a commit message';
+    inputBox.placeHolder = 'What changed?';
+    inputBox.ignoreFocusOut = true;
+    inputBox.buttons = [
+      {
+        iconPath: new vscode.ThemeIcon('sparkle'),
+        tooltip: '✨ Auto Generate'
+      }
+    ];
 
-    if (!announcement || !announcement.success) {
-      const detail = announcement && announcement.message ? announcement.message : 'The commit workflow failed.';
-      await vscode.window.showErrorMessage(detail);
-      return;
+    const commitMessage = (payload && payload.message !== undefined) ? payload.message : '';
+    if (commitMessage) {
+      inputBox.value = commitMessage;
     }
 
-    await vscode.window.showInformationMessage(announcement.message || 'Commit and push completed.');
+    let resolvedMessage = '';
+    let generationPending = false;
+
+    const finalizeCommit = async (message) => {
+      if (!message || !message.trim()) {
+        await vscode.window.showWarningMessage('A commit message is required.');
+        return;
+      }
+
+      await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: 'Committing changes',
+        cancellable: false
+      }, async () => {
+        const token = await getStoredSecret(AUTH_SECRET_KEY);
+        const announcement = await runBackendScript('managers/commit_manager.py', {
+          action: 'commit_and_push',
+          repo_path: repoPath,
+          message: message.trim(),
+          use_ai: false,
+          api_key: token || ''
+        });
+
+        if (!announcement || !announcement.success) {
+          const detail = announcement && announcement.message ? announcement.message : 'The commit workflow failed.';
+          throw new Error(detail);
+        }
+
+        await vscode.window.showInformationMessage(announcement.message || 'Commit and push completed.');
+      });
+    };
+
+    inputBox.onDidAccept(async () => {
+      if (generationPending) {
+        return;
+      }
+
+      const message = inputBox.value.trim();
+      inputBox.dispose();
+      await finalizeCommit(message);
+    });
+
+    inputBox.onDidTriggerButton(async (button) => {
+      if (generationPending) {
+        return;
+      }
+
+      generationPending = true;
+      inputBox.busy = true;
+      inputBox.enabled = false;
+      inputBox.placeholder = 'Generating commit message...';
+      inputBox.value = '';
+
+      try {
+        const diffResult = await runBackendScript('managers/commit_manager.py', {
+          action: 'get_diff',
+          repo_path: repoPath,
+          staged: true
+        });
+
+        if (!diffResult || !diffResult.success) {
+          throw new Error(diffResult && diffResult.message ? diffResult.message : 'Unable to inspect the staged changes.');
+        }
+
+        const apiKey = (await getStoredSecret(ANTHROPIC_SECRET_KEY)) || (await getStoredSecret(AUTH_SECRET_KEY)) || '';
+        const generated = await runBackendScript('services/ai_commit_cli.py', {
+          diff: diffResult.diff || '',
+          api_key: apiKey
+        });
+
+        if (!generated || !generated.success) {
+          throw new Error(generated && generated.error ? generated.error : 'AI generation failed.');
+        }
+
+        inputBox.value = generated.message || '';
+        inputBox.placeholder = 'Enter a commit message';
+        inputBox.enabled = true;
+        inputBox.busy = false;
+        inputBox.validationMessage = '';
+      } catch (error) {
+        inputBox.enabled = true;
+        inputBox.busy = false;
+        inputBox.placeholder = 'Enter a commit message';
+        inputBox.value = '';
+        inputBox.validationMessage = 'Failed to generate commit message.';
+        await vscode.window.showErrorMessage('Failed to generate commit message.');
+      } finally {
+        generationPending = false;
+      }
+    });
+
+    inputBox.show();
   } catch (error) {
     log(`commitAndPush failed: ${error && error.message ? error.message : error}`);
     await vscode.window.showErrorMessage(`Commit and push failed: ${error && error.message ? error.message : error}`);
@@ -687,19 +803,28 @@ async function aiGenerateCommand() {
       await vscode.window.showErrorMessage(detail);
       return;
     }
+      // If actions view is open, post the generated message to it for inline insertion
+      try {
+        if (actionsViewProvider && actionsViewProvider.view && actionsViewProvider.view.webview) {
+          actionsViewProvider.view.webview.postMessage({ command: 'aiGenerated', message: generated.message || '' });
+          return;
+        }
+      } catch (e) {
+        // fall through to inputBox fallback
+      }
 
-    const edited = await vscode.window.showInputBox({
-      prompt: 'Review the generated commit message',
-      value: generated.message || '',
-      ignoreFocusOut: true
-    });
+      const edited = await vscode.window.showInputBox({
+        prompt: 'Review the generated commit message',
+        value: generated.message || '',
+        ignoreFocusOut: true
+      });
 
-    if (edited === undefined) {
-      return;
-    }
+      if (edited === undefined) {
+        return;
+      }
 
-    const finalMessage = edited && edited.trim() ? edited.trim() : generated.message || 'Auto-commit';
-    await vscode.window.showInformationMessage(`Generated commit message: ${finalMessage}`);
+      const finalMessage = edited && edited.trim() ? edited.trim() : generated.message || 'Auto-commit';
+      await vscode.window.showInformationMessage(`Generated commit message: ${finalMessage}`);
   } catch (error) {
     log(`aiGenerate failed: ${error && error.message ? error.message : error}`);
     await vscode.window.showErrorMessage(`AI generation failed: ${error && error.message ? error.message : error}`);
@@ -736,7 +861,6 @@ async function showPanelCommand() {
       <button onclick="vscode.postMessage({ command: 'refreshRepos' })">Refresh</button>
       <button onclick="vscode.postMessage({ command: 'createRepo' })">Create Repo</button>
       <button onclick="vscode.postMessage({ command: 'commitAndPush' })">Commit & Push</button>
-      <button onclick="vscode.postMessage({ command: 'aiGenerate' })">AI Generate</button>
       <script>const vscode = acquireVsCodeApi();</script>
     </body>
     </html>`;

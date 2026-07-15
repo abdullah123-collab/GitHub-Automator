@@ -98,6 +98,7 @@ class GitHubAutomatorApp:
         self.api = GitHubAPI(token)
         self.repos = []
         self.local_repo_path = None
+        self.repo_search_var = tk.StringVar(value="")
         self.anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
         self.status_var = tk.StringVar(value="Ready")
         self.scroll_frame = None
@@ -260,10 +261,9 @@ class GitHubAutomatorApp:
 
         btn1 = tk.Frame(action_buttons, bg=BG)
         btn1.pack(fill="x", pady=4)
-        self._btn(btn1, "↑ Commit & Push", self._commit_and_push,
-                  ACCENT, ACCENT_H).pack(side="left", padx=2, fill="x", expand=True)
-        self._btn(btn1, "✨ AI Generate", self._ai_generate_message,
-                  "#8a5aff", "#9a6aff").pack(side="left", padx=2, fill="x", expand=True)
+        # Single primary action per UX guidelines
+        self._btn(btn1, "⚡ Commit & Push", self._commit_and_push,
+              ACCENT, ACCENT_H).pack(side="left", padx=2, fill="x", expand=True)
 
         btn2 = tk.Frame(action_buttons, bg=BG)
         btn2.pack(fill="x", pady=4)
@@ -364,6 +364,121 @@ class GitHubAutomatorApp:
                                     font=FONT_S, bg=BG, fg=color, anchor="w")
             change_label.pack(fill="x", padx=10, pady=2)
 
+    # ─── UI Helpers: AI inline generation animations ─────────────
+    def _start_loading_border(self, widget):
+        """Animate a blue loading border on a widget by toggling highlight color."""
+        def pulse():
+            if getattr(widget, "_ai_loading", False):
+                # toggle between accent and bg3 to simulate animation
+                widget.config(highlightthickness=2, highlightbackground=ACCENT)
+                widget.after(350, lambda: widget.config(highlightbackground=BG3))
+                widget.after(700, pulse)
+        widget._ai_loading = True
+        pulse()
+
+    def _stop_loading_border(self, widget):
+        widget._ai_loading = False
+        try:
+            widget.config(highlightthickness=1, highlightbackground=BORDER)
+        except Exception:
+            pass
+
+    def _inline_generate_commit_message(self, text_widget):
+        """Generate a commit message and insert it into the provided Text widget."""
+        if not self.anthropic_key:
+            # generate using rule-based fallback (generate_commit_message works without key)
+            pass
+
+        # set placeholder and start animation
+        def start_ui():
+            text_widget.delete("1.0", "end")
+            text_widget.insert("1.0", "Generating commit message...")
+            self._start_loading_border(text_widget)
+            text_widget.config(state="normal")
+        self.root.after(0, start_ui)
+
+        def task():
+            try:
+                unstaged = get_git_diff(self.local_repo_path, staged=False)
+                staged   = get_git_diff(self.local_repo_path, staged=True)
+
+                untracked_result = subprocess.run(
+                    ["git", "ls-files", "--others", "--exclude-standard"],
+                    cwd=self.local_repo_path, capture_output=True, text=True, timeout=5
+                )
+                untracked = untracked_result.stdout.strip()
+
+                combined_diff = ""
+                if staged:
+                    combined_diff += f"=== STAGED CHANGES ===\n{staged}\n\n"
+                if unstaged:
+                    combined_diff += f"=== UNSTAGED CHANGES ===\n{unstaged}\n\n"
+                if untracked:
+                    combined_diff += f"=== NEW FILES ===\n{untracked}\n"
+
+                if not combined_diff.strip():
+                    result = {"success": True, "message": "chore: update files"}
+                else:
+                    result = generate_commit_message(combined_diff[:4000], self.anthropic_key)
+
+                def finish_ui():
+                    self._stop_loading_border(text_widget)
+                    if result.get("success"):
+                        # replace text with generated message
+                        text_widget.delete("1.0", "end")
+                        # gentle visual cue: flash background
+                        orig_bg = text_widget.cget("bg")
+                        text_widget.config(bg=ACCENT_H)
+                        text_widget.insert("1.0", result.get("message", ""))
+                        self.root.after(180, lambda: text_widget.config(bg=orig_bg))
+                    else:
+                        messagebox.showerror("AI Error", result.get("error", "Unknown error"))
+
+                self.root.after(0, finish_ui)
+            except Exception as e:
+                def fail_ui():
+                    self._stop_loading_border(text_widget)
+                    messagebox.showerror("Error", str(e))
+                self.root.after(0, fail_ui)
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _inline_generate_repo_description(self, desc_var, name_var=None, topics_var=None):
+        """Generate a professional repository description and set it to desc_var."""
+        # lightweight UI: find the widget for repo description by searching (best-effort)
+        # create a simple placeholder dialog if no UI reference
+        prompt_parts = []
+        if name_var:
+            name = name_var.get().strip()
+            if name:
+                prompt_parts.append(f"Repository name: {name}")
+        if topics_var:
+            topics = topics_var.get().strip()
+            if topics:
+                prompt_parts.append(f"Topics: {topics}")
+
+        placeholder = "Generating repository description..."
+        # try to set placeholder in desc_var
+        try:
+            desc_var.set(placeholder)
+        except Exception:
+            pass
+
+        def task():
+            try:
+                prompt = "\n".join(prompt_parts) or "Create a short professional GitHub repository description."
+                # reuse generator: it's fine as a fallback
+                result = generate_commit_message(prompt, self.anthropic_key)
+                if result.get("success"):
+                    desc = result.get("message", "")
+                    self.root.after(0, lambda: desc_var.set(desc))
+                else:
+                    self.root.after(0, lambda: messagebox.showerror("AI Error", result.get("error", "Unknown")))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+
+        threading.Thread(target=task, daemon=True).start()
+
     def _preview_changes(self):
         """Show diff preview of changes."""
         try:
@@ -410,9 +525,23 @@ class GitHubAutomatorApp:
         form.pack(fill="both", expand=True)
 
         tk.Label(form, text="Commit Message *", font=FONT_S, bg=BG, fg=FG).pack(anchor="w")
-        msg_text = tk.Text(form, font=FONT, bg=BG2, fg=FG, height=6,
-                           insertbackground=FG, relief="flat", bd=6)
-        msg_text.pack(fill="both", expand=True, pady=(2, 10))
+        # Message frame with inline AI icon
+        msg_frame = tk.Frame(form, bg=BG)
+        msg_frame.pack(fill="both", expand=True, pady=(2, 10))
+        msg_text = tk.Text(msg_frame, font=FONT, bg=BG2, fg=FG, height=6,
+                           insertbackground=FG, relief="flat", bd=6, highlightthickness=1,
+                           highlightbackground=BORDER)
+        msg_text.grid(row=0, column=0, sticky="nsew")
+        msg_frame.grid_rowconfigure(0, weight=1)
+        msg_frame.grid_columnconfigure(0, weight=1)
+
+        def _on_generate():
+            self._inline_generate_commit_message(msg_text)
+
+        ai_btn = tk.Button(msg_frame, text="✨", command=_on_generate,
+                           bg=BG3, fg=FG, relief="flat", width=3, cursor="hand2",
+                           activebackground=BG2)
+        ai_btn.grid(row=0, column=1, sticky="ne", padx=(6,0), pady=6)
         msg_text.focus()
 
         tk.Label(form, text="Push to Branch", font=FONT_S, bg=BG, fg=FG).pack(anchor="w")
@@ -670,9 +799,34 @@ class GitHubAutomatorApp:
         self._btn(btn_frame, "Create Repo", self._create_repo, ACCENT, ACCENT_H).pack(side="left", padx=4)
         self._btn(btn_frame, "Clone Repo", self._clone_repo, "#5a5a8a", "#6a6a9a").pack(side="left", padx=4)
         self._btn(btn_frame, "Refresh", self._load_repos, BG3, "#3c3c3c").pack(side="left", padx=4)
+        # Small trash/dustbin button (last)
+        def _open_trash():
+            messagebox.showinfo("Trash", "Repository trash / deleted items")
+        tk.Button(btn_frame, text="🗑", command=_open_trash, bg=BG, fg=FG,
+                  relief="flat", cursor="hand2", activebackground=BG3).pack(side="left", padx=6)
 
-        tk.Label(self.root, text="  Repositories", font=FONT_B,
-                 bg=BG, fg=FG, anchor="w").pack(fill="x", padx=14)
+        # Repositories header with search
+        hdr_frame = tk.Frame(self.root, bg=BG, padx=14)
+        hdr_frame.pack(fill="x")
+        tk.Label(hdr_frame, text="Repositories", font=FONT_B,
+                 bg=BG, fg=FG, anchor="w").pack(side="left")
+
+        search_entry = tk.Entry(hdr_frame, textvariable=self.repo_search_var,
+                                font=FONT, bg=BG2, fg=FG, insertbackground=FG,
+                                relief="flat", bd=6)
+        search_entry.pack(side="right", padx=6)
+        # lightweight placeholder handling
+        search_entry.insert(0, "🔍 Search repositories...")
+        def _on_search_focus_in(e):
+            if search_entry.get().startswith("🔍"):
+                search_entry.delete(0, "end")
+        def _on_search_focus_out(e):
+            if not search_entry.get().strip():
+                search_entry.insert(0, "🔍 Search repositories...")
+        search_entry.bind("<FocusIn>", _on_search_focus_in)
+        search_entry.bind("<FocusOut>", _on_search_focus_out)
+        # Re-render list on search change
+        self.repo_search_var.trace_add("write", lambda *_: self._render_repos(self.repos))
 
         list_frame = tk.Frame(self.root, bg=BG)
         list_frame.pack(fill="both", expand=True, padx=14, pady=(4, 0))
@@ -748,7 +902,14 @@ class GitHubAutomatorApp:
                      font=FONT, bg=BG, fg=FG).pack(pady=20)
             return
 
-        for r in repos:
+        # Apply search filter if present
+        query = (self.repo_search_var.get() or "").strip()
+        filtered = repos
+        if query and not query.startswith("🔍"):
+            q = query.lower()
+            filtered = [r for r in repos if q in (r.get("name", "").lower() + " " + (r.get("description") or "").lower())]
+
+        for r in filtered:
             self._repo_card(r)
 
     def _clear_repo_list(self):
@@ -869,9 +1030,16 @@ class GitHubAutomatorApp:
         language   = repo.get("language") or "N/A"
         url        = repo.get("html_url", "")
         clone_url  = repo.get("clone_url", "")
+        # Determine if this repo is active (opened locally)
+        active = False
+        try:
+            if self.local_repo_path and os.path.basename(self.local_repo_path) == name:
+                active = True
+        except Exception:
+            active = False
 
         card = tk.Frame(self.scroll_frame, bg=BG2, pady=8, padx=10,
-                        highlightbackground=BORDER, highlightthickness=1)
+                        highlightbackground=(ACCENT if active else BORDER), highlightthickness=(2 if active else 1))
         card.pack(fill="x", pady=3, padx=2)
 
         accent = tk.Frame(card, bg=ACCENT, width=3)
@@ -884,6 +1052,10 @@ class GitHubAutomatorApp:
         name_row.pack(fill="x")
 
         tk.Label(name_row, text=name, font=FONT_B, bg=BG2, fg=FG).pack(side="left")
+        if active:
+            # small green dot + Active label
+            tk.Label(name_row, text="●", font=("Segoe UI",8), bg=BG2, fg="#4caf50").pack(side="left", padx=(8,2))
+            tk.Label(name_row, text="Active", font=("Segoe UI",8), bg=BG2, fg="#4caf50").pack(side="left", padx=(0,6))
         self._badge(name_row, "🔒 Private" if is_private else "🌐 Public").pack(side="left", padx=4)
         if language != "N/A":
             self._badge(name_row, language).pack(side="left", padx=2)
@@ -949,8 +1121,18 @@ class GitHubAutomatorApp:
 
         tk.Label(form, text="Description (optional)", font=FONT_S, bg=BG, fg=FG).pack(anchor="w")
         desc_var = tk.StringVar()
-        tk.Entry(form, textvariable=desc_var, font=FONT,
-                 bg=BG2, fg=FG, insertbackground=FG, relief="flat", bd=6).pack(fill="x", pady=(2, 10))
+        # Description with inline AI icon
+        desc_frame = tk.Frame(form, bg=BG)
+        desc_frame.pack(fill="x", pady=(2, 10))
+        desc_entry = tk.Entry(desc_frame, textvariable=desc_var, font=FONT,
+                               bg=BG2, fg=FG, insertbackground=FG, relief="flat", bd=6)
+        desc_entry.pack(side="left", fill="x", expand=True)
+        def _gen_desc():
+            self._inline_generate_repo_description(desc_var, name_var, topics_var)
+        ai_desc_btn = tk.Button(desc_frame, text="✨", command=_gen_desc,
+                                bg=BG3, fg=FG, relief="flat", width=3, cursor="hand2",
+                                activebackground=BG2)
+        ai_desc_btn.pack(side="right", padx=(6,0))
 
         tk.Label(form, text="Topics (comma-separated, optional)", font=FONT_S, bg=BG, fg=FG).pack(anchor="w")
         topics_var = tk.StringVar()

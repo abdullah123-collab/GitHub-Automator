@@ -115,7 +115,7 @@ Called when user clicks "+" button on a repository item.
 │ (Python: check_repo_exists) │
 └────────┬────────────────────┘
          │
-    ┌────┴────┐
+    ┌────┴─── ─┐
     │          │
    YES       NO
     │          │
