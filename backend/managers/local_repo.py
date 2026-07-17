@@ -46,7 +46,7 @@ def is_git_repo(repo_path: str) -> bool:
     return ok
 
 
-def init_git_repo(repo_path: str) -> Dict:
+def init_git_repo(repo_path: str, default_branch: str = "main") -> Dict:
     """
     Initialize a new git repository at repo_path.
     
@@ -73,7 +73,7 @@ def init_git_repo(repo_path: str) -> Dict:
         }
     
     # Initialize git repo
-    ok, msg = _run(["git", "init"], cwd=repo_path)
+    ok, msg = _run(["git", "init", "-b", default_branch], cwd=repo_path)
     if not ok:
         return {
             "success": False,
@@ -222,7 +222,8 @@ if __name__ == "__main__":
                 "is_git_repo": is_repo
             }))
         elif action == "init_git_repo":
-            result = init_git_repo(repo_path)
+            default_branch = args.get("default_branch", "main")
+            result = init_git_repo(repo_path, default_branch)
             print(json.dumps(result))
         elif action == "get_repo_info":
             result = get_repo_info(repo_path)

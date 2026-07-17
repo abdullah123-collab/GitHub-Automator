@@ -165,8 +165,83 @@ def unregister_repo(repo_name: str) -> Dict:
     }
 
 
+import re
+
+def _extract_owner_repo(url: str) -> tuple:
+    """Extract owner and repo from a GitHub URL."""
+    if not url:
+        return "", ""
+    if url.endswith(".git"):
+        url = url[:-4]
+    match = re.search(r'github\.com[:/]([^/]+)/([^/]+)$', url)
+    if match:
+        return match.group(1).lower(), match.group(2).lower()
+    return "", ""
+
+def _get_remote_url(repo_path: str) -> str:
+    """Get the remote origin URL of a local git repository."""
+    try:
+        result = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+def get_all_cloned_repos(workspace_path: str = None) -> set:
+    """Returns a set of 'owner/repo' strings for all locally cloned repositories, caching results in the registry."""
+    registry = load_registry()
+    cloned_set = set()
+    changed = False
+
+    paths_to_check = []
+    for repo_name, info in registry.items():
+        repo_path = info.get("path")
+        if not repo_path or not os.path.isdir(os.path.join(repo_path, ".git")):
+            continue
+            
+        owner = info.get("owner")
+        repo = info.get("repo")
+        if owner and repo:
+            cloned_set.add(f"{owner.lower()}/{repo.lower()}")
+        else:
+            paths_to_check.append((repo_name, repo_path))
+
+    if workspace_path and workspace_path not in [info.get("path") for info in registry.values() if info.get("path")]:
+        paths_to_check.append((None, workspace_path))
+
+    for repo_name, repo_path in paths_to_check:
+        if not repo_path or not os.path.isdir(os.path.join(repo_path, ".git")):
+            continue
+        remote_url = _get_remote_url(repo_path)
+        local_owner, local_repo = _extract_owner_repo(remote_url)
+        if local_owner and local_repo:
+            cloned_set.add(f"{local_owner.lower()}/{local_repo.lower()}")
+            if repo_name and repo_name in registry:
+                registry[repo_name]["owner"] = local_owner
+                registry[repo_name]["repo"] = local_repo
+                changed = True
+
+    if changed:
+        save_registry(registry)
+        
+    return cloned_set
+
+def is_repo_cloned(owner: str, repo_name: str, workspace_path: str = None) -> bool:
+    """Check if a specific GitHub repository is cloned."""
+    if not owner or not repo_name:
+        return False
+    cloned_set = get_all_cloned_repos(workspace_path)
+    return f"{owner.lower()}/{repo_name.lower()}" in cloned_set
+
 def repo_exists_locally(repo_name: str) -> bool:
-    """Check if a repository exists locally in the registry."""
+    """Legacy check if a repository exists locally in the registry purely by name."""
     return find_repo_by_name(repo_name) is not None
 
 

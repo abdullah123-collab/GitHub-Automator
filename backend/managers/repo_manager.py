@@ -23,7 +23,7 @@ import urllib.error
 from services.github_api import GitHubAPI
 from services.repo_registry import (
     repo_exists_locally, find_repo_by_name, register_repo,
-    cleanup_registry, get_repo_info
+    cleanup_registry, get_repo_info, is_repo_cloned
 )
 
 
@@ -51,9 +51,14 @@ def delete_repo(api: GitHubAPI, owner: str, repo: str) -> dict:
         return {"success": False, "error": str(e)}
 
 
-def list_repos(api: GitHubAPI) -> dict:
+def list_repos(api: GitHubAPI, workspace_path: str = None, page: int = 1) -> dict:
+    import time
+    start = time.time()
     try:
-        repos = api.list_repos(per_page=30)
+        from services.repo_registry import get_all_cloned_repos
+        repos = api.list_repos_page(per_page=100, page=page)
+        cloned_set = get_all_cloned_repos(workspace_path)
+        
         simplified = [
             {
                 "name": r.get("name"),
@@ -62,11 +67,15 @@ def list_repos(api: GitHubAPI) -> dict:
                 "url": r.get("html_url"),
                 "clone_url": r.get("clone_url"),
                 "updated_at": r.get("updated_at"),
-                "language": r.get("language") or "N/A"
+                "language": r.get("language") or "N/A",
+                "is_cloned": f"{r.get('owner', {}).get('login', '').lower()}/{r.get('name', '').lower()}" in cloned_set,
+                "owner": r.get("owner", {}).get("login", "")
             }
             for r in repos
         ]
-        return {"success": True, "repos": simplified}
+        import sys
+        print(f"list_repos page {page} took {time.time() - start:.4f}s", file=sys.stderr)
+        return {"success": True, "repos": simplified, "has_more": len(repos) == 100}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -175,7 +184,9 @@ if __name__ == "__main__":
         )
 
     elif action == "list":
-        result = list_repos(api)
+        workspace_path = args.get("repo_path")
+        page = args.get("page", 1)
+        result = list_repos(api, workspace_path=workspace_path, page=page)
 
     elif action == "clone":
         result = clone_repo(
@@ -204,6 +215,18 @@ if __name__ == "__main__":
     
     elif action == "cleanup_registry":
         result = cleanup_registry()
+
+    elif action == "update_description":
+        owner = args.get("owner", "")
+        repo = args.get("repo", "")
+        description = args.get("description", "")
+        try:
+            if not owner:
+                owner = api.get_user().get("login")
+            api.update_repo(owner, repo, {"description": description})
+            result = {"success": True, "message": "Description updated successfully"}
+        except Exception as e:
+            result = {"success": False, "error": str(e)}
 
     else:
         result = {"success": False, "error": f"Unknown action: {action}"}

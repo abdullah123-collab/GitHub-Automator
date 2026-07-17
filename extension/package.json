@@ -122,6 +122,26 @@
           "when": "githubAutomator.authenticated"
         }
       ]
+    },
+    "configuration": {
+      "title": "GitHub Automator",
+      "properties": {
+        "github-automator.defaultBranch": {
+          "type": "string",
+          "default": "main",
+          "description": "Default branch to use when initializing new repositories or falling back on git push."
+        },
+        "github-automator.autoPush": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically push after a successful commit in the Git Actions view."
+        },
+        "github-automator.anthropicModel": {
+          "type": "string",
+          "default": "claude-3-5-haiku-latest",
+          "description": "Anthropic Claude model to use for AI commit messages."
+        }
+      }
     }
   },
   "dependencies": {

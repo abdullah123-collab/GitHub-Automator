@@ -9,16 +9,19 @@ Provides:
 import re
 
 
-def generate_commit_message(diff: str, api_key: str = "") -> dict:
+def generate_commit_message(diff: str, api_key: str = "", model: str = "claude-3-5-haiku-latest") -> dict:
     """
-    Generate a commit message from git diff.
-    Uses rule-based analysis — no API key needed.
-    Falls back to Anthropic API only if api_key is provided and valid.
+    Generate a commit message from a diff.
+    If api_key is provided, uses Anthropic API.
+    Otherwise, uses the local rule-based fallback.
     """
+    if not diff.strip():
+        return {"success": False, "error": "Empty diff"}
+
     try:
         # Try Anthropic API first if key is provided
         if api_key and api_key != "" and not api_key.startswith("demo"):
-            result = _try_anthropic(diff, api_key)
+            result = _try_anthropic(diff, api_key, model)
             if result["success"]:
                 return result
             # If API fails (credits etc), fall through to rule-based
@@ -31,14 +34,14 @@ def generate_commit_message(diff: str, api_key: str = "") -> dict:
         return {"success": False, "error": str(e)}
 
 
-def _try_anthropic(diff: str, api_key: str) -> dict:
+def _try_anthropic(diff: str, api_key: str, model: str) -> dict:
     """Try to use Anthropic API for commit message."""
     try:
         import urllib.request
         import json
 
         payload = json.dumps({
-            "model": "claude-haiku-4-5-20251001",
+            "model": model,
             "max_tokens": 200,
             "messages": [{
                 "role": "user",

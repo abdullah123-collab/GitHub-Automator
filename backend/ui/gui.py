@@ -24,6 +24,8 @@ import os
 from tkinter import ttk, messagebox, simpledialog, filedialog, scrolledtext
 from services.github_api import GitHubAPI
 from services.ai_commit import generate_commit_message
+from services.repo_registry import repo_exists_locally, register_repo, is_repo_cloned
+from managers.commit_manager import stage_commit_push
 
 
 # ─── Theme Colors ─────────────────────────────────────────────────
@@ -188,6 +190,7 @@ class GitHubAutomatorApp:
                                cwd=folder, capture_output=True, timeout=5)
                 self.root.after(0, lambda: (
                     setattr(self, "local_repo_path", folder),
+                    register_repo(folder),
                     self._build_local_ui()
                 ))
                 self.root.after(100, lambda: self._set_status("✅ Repository initialized!"))
@@ -209,6 +212,7 @@ class GitHubAutomatorApp:
                                capture_output=True, timeout=60)
                 self.root.after(0, lambda: (
                     setattr(self, "local_repo_path", folder),
+                    register_repo(folder),
                     self._build_local_ui()
                 ))
                 self.root.after(100, lambda: self._set_status("✅ Clone complete!"))
@@ -698,67 +702,24 @@ class GitHubAutomatorApp:
                   BG3, "#3c3c3c").pack(side="left", fill="x", expand=True, padx=2)
 
     def _perform_commit(self, message, branch):
-        """Perform the actual commit and push with token auth."""
-        self._set_status("Staging changes...")
+        """Perform the actual commit and push using commit_manager."""
+        self._set_status("Staging, committing, and pushing...")
 
         def task():
             try:
-                # Step 1: Stage all
-                subprocess.run(["git", "add", "-A"], cwd=self.local_repo_path,
-                               capture_output=True, timeout=10)
-                self.root.after(0, lambda: self._set_status("Committing..."))
-
-                # Step 2: Commit
-                commit_result = subprocess.run(
-                    ["git", "commit", "-m", message],
-                    cwd=self.local_repo_path,
-                    capture_output=True, text=True, timeout=10
-                )
-
-                if commit_result.returncode != 0:
-                    err = commit_result.stderr.strip() or commit_result.stdout.strip()
-                    if "nothing to commit" not in err.lower():
-                        self.root.after(0, lambda: (
-                            self._set_status("Commit failed"),
-                            messagebox.showerror("Commit Failed", err)
-                        ))
-                        return
-
-                self.root.after(0, lambda: self._set_status("Pushing..."))
-
-                # Step 3: Push with token auth injected into URL
-                remote_result = subprocess.run(
-                    ["git", "remote", "get-url", "origin"],
-                    cwd=self.local_repo_path,
-                    capture_output=True, text=True, timeout=5
-                )
-                remote_url = remote_result.stdout.strip()
-
-                if remote_url.startswith("https://") and self.token and self.token != "demo-token":
-                    auth_url = remote_url.replace("https://", f"https://{self.token}@")
-                    result = subprocess.run(
-                        ["git", "push", auth_url, f"HEAD:{branch}"],
-                        cwd=self.local_repo_path,
-                        capture_output=True, text=True, timeout=30
-                    )
-                else:
-                    result = subprocess.run(
-                        ["git", "push", "-u", "origin", branch],
-                        cwd=self.local_repo_path,
-                        capture_output=True, text=True, timeout=30
-                    )
-
-                if result.returncode == 0:
+                result = stage_commit_push(self.local_repo_path, message, auto_push=True)
+                
+                if result["success"]:
                     self.root.after(0, lambda: (
-                        self._set_status(f"✅ Pushed to '{branch}'!"),
-                        messagebox.showinfo("Success", f"Changes pushed to '{branch}'!"),
+                        self._set_status(result.get("message", "✅ Success")),
+                        messagebox.showinfo("Success", result.get("message", "Changes staged, committed, and pushed successfully!")),
                         self._refresh_local_status()
                     ))
                 else:
-                    err = result.stderr.strip()
+                    err = result.get("message", "Unknown error")
                     self.root.after(0, lambda: (
-                        self._set_status("Push failed"),
-                        messagebox.showerror("Push Failed", err)
+                        self._set_status("Failed"),
+                        messagebox.showerror("Error", err)
                     ))
             except Exception as e:
                 self.root.after(0, lambda: (
@@ -1051,7 +1012,14 @@ class GitHubAutomatorApp:
         name_row = tk.Frame(info, bg=BG2)
         name_row.pack(fill="x")
 
-        tk.Label(name_row, text=name, font=FONT_B, bg=BG2, fg=FG).pack(side="left")
+        tk.Label(name_row, text=f"▶ {name}", font=FONT_B, bg=BG2, fg=FG).pack(side="left")
+        owner      = repo.get("owner", {}).get("login", "")
+        # Clone detection: 📁 if cloned locally, ☁️ if not
+        clone_icon = "📁" if is_repo_cloned(owner, name, workspace_path=self.local_repo_path) else "☁️"
+        folder_btn = tk.Button(name_row, text=clone_icon, command=lambda cu=clone_url, n=name: self._smart_open_repo(cu, n),
+                               bg=BG2, fg=FG, font=FONT, relief="flat", cursor="hand2", bd=0, padx=2, pady=0,
+                               activebackground=BG3, activeforeground=FG)
+        folder_btn.pack(side="left", padx=(4, 2))
         if active:
             # small green dot + Active label
             tk.Label(name_row, text="●", font=("Segoe UI",8), bg=BG2, fg="#4caf50").pack(side="left", padx=(8,2))
@@ -1066,16 +1034,12 @@ class GitHubAutomatorApp:
         actions = tk.Frame(card, bg=BG2)
         actions.pack(side="right", padx=6)
 
-        # ✅ NEW: "📂 Open" button — smart open (existing clone detect kare ya clone karke VS Code mein open kare)
-        self._btn(actions, "📂 Open", lambda cu=clone_url, n=name: self._smart_open_repo(cu, n),
-                  "#2d7a4f", "#3a9a62").pack(side="left", padx=2)
-
         # 🌐 GitHub button — browser mein open kare (pehle wala "Open" button)
         self._btn(actions, "🌐 GitHub", lambda u=url: self._open_url(u),
                   BG3, "#3c3c3c").pack(side="left", padx=2)
 
         # 🗑 Delete button
-        self._btn(actions, "Delete", lambda n=name: self._delete_repo(n),
+        self._btn(actions, "🗑️", lambda n=name: self._delete_repo(n),
                   DANGER, DANGER_H).pack(side="left", padx=2)
 
     def _badge(self, parent, text):
@@ -1296,6 +1260,7 @@ class GitHubAutomatorApp:
                     capture_output=True, text=True, timeout=60
                 )
                 if result.returncode == 0:
+                    register_repo(dest_path)
                     self.root.after(0, lambda: self._set_status(f"✅ Cloned to {dest_path}"))
                     self.root.after(0, lambda: messagebox.showinfo(
                         "Cloned!", f"'{repo_name}' cloned to:\n{dest_path}"))

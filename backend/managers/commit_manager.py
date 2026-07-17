@@ -119,13 +119,23 @@ def push(repo_path: str) -> Tuple[bool, str]:
                 return False, f"Pulled changes but push still failed: {retry_msg}"
         else:
             return False, f"Failed to pull remote changes: {pull_msg}. Please resolve conflicts manually and try again."
-    
+            
+    if not ok and ("no upstream branch" in msg.lower() or "set-upstream" in msg.lower()):
+        branch_ok, branch_msg = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path)
+        if branch_ok and branch_msg:
+            branch = branch_msg.strip()
+            ok, msg = _run(["git", "push", "--set-upstream", "origin", branch], cwd=repo_path, timeout=60)
+            if ok:
+                return True, f"Pushed successfully and set upstream to origin/{branch}"
+            else:
+                return False, f"Failed to push with upstream branch {branch}: {msg}"
+
     return ok, msg
 
 
-def stage_commit_push(repo_path: str, message: str) -> dict:
+def stage_commit_push(repo_path: str, message: str, auto_push: bool = True) -> dict:
     """
-    All-in-one: stage → commit → push.
+    All-in-one: stage → commit → (optional) push.
     Returns a result dict with per-step status.
     """
     result = {
@@ -148,27 +158,35 @@ def stage_commit_push(repo_path: str, message: str) -> dict:
         # ✅ FIXED: "nothing to commit" — still try to push unpushed commits
         if "nothing to commit" in msg.lower():
             result["commit"]["msg"] = "Nothing to commit — working tree clean."
-            ok, msg = push(repo_path)
-            result["push"] = {"ok": ok, "msg": msg}
-            result["success"] = ok
-            if ok:
-                result["message"] = "✅ Nothing new to commit, pushed existing commits successfully."
+            if auto_push:
+                ok, msg = push(repo_path)
+                result["push"] = {"ok": ok, "msg": msg}
+                result["success"] = ok
+                if ok:
+                    result["message"] = "✅ Nothing new to commit, pushed existing commits successfully."
+                else:
+                    result["message"] = f"Nothing new to commit, and push failed: {msg}"
             else:
-                result["message"] = f"Nothing new to commit, and push failed: {msg}"
+                result["success"] = True
+                result["message"] = "✅ Nothing new to commit (push skipped)."
         return result
 
     # Step 3: Push (with auto-pull on conflict)
-    ok, msg = push(repo_path)
-    result["push"] = {"ok": ok, "msg": msg}
-    result["success"] = ok
-    
-    if ok:
-        if "Pulled" in msg:
-            result["message"] = "✅ Changes committed and pushed! (Pulled remote changes first)"
+    if auto_push:
+        ok, msg = push(repo_path)
+        result["push"] = {"ok": ok, "msg": msg}
+        result["success"] = ok
+        
+        if ok:
+            if "Pulled" in msg:
+                result["message"] = "✅ Changes committed and pushed! (Pulled remote changes first)"
+            else:
+                result["message"] = "✅ Changes staged, committed, and pushed successfully"
         else:
-            result["message"] = "✅ Changes staged, committed, and pushed successfully"
+            result["message"] = msg
     else:
-        result["message"] = msg
+        result["success"] = True
+        result["message"] = "✅ Changes staged and committed successfully (push skipped)."
 
     return result
 
@@ -179,8 +197,8 @@ if __name__ == "__main__":
     import json
     
     try:
-        args = json.loads(sys.stdin.read())
-    except:
+        args = json.loads(sys.stdin.buffer.read().decode('utf-8'))
+    except json.JSONDecodeError:
         print(json.dumps({"success": False, "error": "Invalid JSON input"}))
         sys.exit(1)
     
@@ -218,14 +236,16 @@ if __name__ == "__main__":
             if not message:
                 message = "Auto-commit"
             
-            result = stage_commit_push(repo_path, message)
+            auto_push = args.get("auto_push", True)
+            result = stage_commit_push(repo_path, message, auto_push)
             print(json.dumps({
                 "success": result["success"],
                 "message": result.get("message", (f"Staged | Committed | Pushed" if result["success"] else result["push"]["msg"])),
                 "details": result
             }))
         elif action == "get_diff":
-            ok, diff = get_diff(repo_path)
+            staged = args.get("staged", False)
+            ok, diff = get_diff(repo_path, staged=staged)
             if ok:
                 print(json.dumps({"success": True, "diff": diff}))
             else:
