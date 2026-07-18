@@ -1229,7 +1229,7 @@ async function refreshReposCommand() {
     let allRepos = [];
     let hasMore = true;
 
-    while (hasMore && page <= 5) { // max 5 pages (500 repos)
+    while (hasMore && page <= 10) { // max 10 pages (1000 repos)
       console.time(`repo_manager-list-page-${page}`);
       const result = await runBackendScript('managers/repo_manager.py', { 
         action: 'list', 
@@ -1386,6 +1386,7 @@ async function createRepoCommand() {
 
       inputBox.onDidTriggerButton(async (button) => {
         if (button.iconPath.id === 'wand') {
+          const prevValue = inputBox.value;
           inputBox.busy = true;
           inputBox.enabled = false;
           inputBox.placeholder = 'Generating description...';
@@ -1398,7 +1399,7 @@ async function createRepoCommand() {
           });
 
           if (generated && generated.success) {
-            inputBox.value = generated.description || '';
+            inputBox.value = generated.description || prevValue;
             inputBox.placeholder = 'Click the 🪄 icon on the top right to generate a description, or type one manually...';
             inputBox.enabled = true;
             inputBox.busy = false;
@@ -1408,7 +1409,7 @@ async function createRepoCommand() {
             inputBox.enabled = true;
             inputBox.busy = false;
             inputBox.placeholder = 'Click the 🪄 icon on the top right to generate a description, or type one manually...';
-            inputBox.value = '';
+            inputBox.value = prevValue;
             inputBox.validationMessage = errorMessage;
           }
         }
@@ -2747,6 +2748,36 @@ async function commitAndPushCommand(payload) {
       return;
     }
 
+    const handleCommitError = async (error) => {
+      log(`commitAndPush failed: ${error && error.message ? error.message : error}`);
+      const msg = error && error.message ? error.message : String(error);
+      
+      if (msg.toLowerCase().includes('conflict')) {
+        vscode.commands.executeCommand('git.refresh');
+      }
+
+      if (msg.toLowerCase().includes('merge conflict')) {
+        const action = await vscode.window.showErrorMessage(`Commit and push failed: ${msg}`, 'View Conflicts', 'Abort Merge');
+        if (action === 'Abort Merge') {
+          const result = await runBackendScript('managers/local_repo.py', { action: 'abort_merge', repo_path: repoPath });
+          if (result && result.success) {
+            await vscode.window.showInformationMessage('Merge aborted successfully.');
+          } else {
+            await vscode.window.showErrorMessage(`Failed to abort merge: ${result ? result.error : 'Unknown error'}`);
+          }
+        } else if (action === 'View Conflicts') {
+          const result = await runBackendScript('managers/local_repo.py', { action: 'get_conflicted_files', repo_path: repoPath });
+          if (result && result.success && result.files && result.files.length > 0) {
+            await vscode.window.showInformationMessage(`Conflicted files: ${result.files.join(', ')}`);
+          } else {
+            await vscode.window.showInformationMessage('No conflicted files found or could not retrieve them.');
+          }
+        }
+      } else {
+        await vscode.window.showErrorMessage(`Commit and push failed: ${msg}`);
+      }
+    };
+
     const inputBox = vscode.window.createInputBox();
     inputBox.title = 'Commit & Push';
     inputBox.prompt = 'Auto-Generate Commit Message';
@@ -2810,7 +2841,11 @@ async function commitAndPushCommand(payload) {
 
       const message = inputBox.value.trim();
       inputBox.dispose();
-      await finalizeCommit(message);
+      try {
+        await finalizeCommit(message);
+      } catch (e) {
+        await handleCommitError(e);
+      }
     });
 
     inputBox.onDidTriggerButton(async (button) => {
@@ -2819,6 +2854,7 @@ async function commitAndPushCommand(payload) {
       }
 
       generationPending = true;
+      const prevValue = inputBox.value;
       inputBox.busy = true;
       inputBox.enabled = false;
       inputBox.placeholder = 'Generating commit message...';
@@ -2848,7 +2884,7 @@ async function commitAndPushCommand(payload) {
           throw new Error(generated && generated.error ? generated.error : 'AI generation failed.');
         }
 
-        inputBox.value = generated.message || '';
+        inputBox.value = generated.message || prevValue;
         inputBox.placeholder = 'Click the 🪄 icon on the top right to auto-generate, or type your own commit message...';
         inputBox.enabled = true;
         inputBox.busy = false;
@@ -2857,7 +2893,7 @@ async function commitAndPushCommand(payload) {
         inputBox.enabled = true;
         inputBox.busy = false;
         inputBox.placeholder = 'Click the 🪄 icon on the top right to auto-generate, or type your own commit message...';
-        inputBox.value = '';
+        inputBox.value = prevValue;
         const errorMessage = error && error.message ? error.message : 'Failed to generate commit message.';
         inputBox.validationMessage = errorMessage;
         await vscode.window.showErrorMessage(errorMessage);
@@ -2868,29 +2904,7 @@ async function commitAndPushCommand(payload) {
 
     inputBox.show();
   } catch (error) {
-    log(`commitAndPush failed: ${error && error.message ? error.message : error}`);
-    const msg = error && error.message ? error.message : String(error);
-    if (msg.toLowerCase().includes('merge conflict')) {
-      const action = await vscode.window.showErrorMessage(`Commit and push failed: ${msg}`, 'View Conflicts', 'Abort Merge');
-      const repoPath = getWorkspacePath();
-      if (action === 'Abort Merge') {
-        const result = await runBackendScript('managers/local_repo.py', { action: 'abort_merge', repo_path: repoPath });
-        if (result && result.success) {
-          await vscode.window.showInformationMessage('Merge aborted successfully.');
-        } else {
-          await vscode.window.showErrorMessage(`Failed to abort merge: ${result ? result.error : 'Unknown error'}`);
-        }
-      } else if (action === 'View Conflicts') {
-        const result = await runBackendScript('managers/local_repo.py', { action: 'get_conflicted_files', repo_path: repoPath });
-        if (result && result.success && result.files && result.files.length > 0) {
-          await vscode.window.showInformationMessage(`Conflicted files: ${result.files.join(', ')}`);
-        } else {
-          await vscode.window.showInformationMessage('No conflicted files found or could not retrieve them.');
-        }
-      }
-    } else {
-      await vscode.window.showErrorMessage(`Commit and push failed: ${msg}`);
-    }
+    await handleCommitError(error);
   }
 }
 

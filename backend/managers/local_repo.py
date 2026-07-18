@@ -398,7 +398,7 @@ if __name__ == "__main__":
             branches = []
             for line in out_merged.splitlines():
                 b = line.replace("*", "").strip()
-                if b and b != current and b not in ["main", "master", "develop"]:
+                if b and b != current and b not in ["main", "master", "develop", "production", "trunk", "staging"]:
                     branches.append(b)
             
             cleaned = []
