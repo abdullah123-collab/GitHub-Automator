@@ -60,6 +60,28 @@ def list_repos(api: GitHubAPI, workspace_path: str = None, page: int = 1) -> dic
         repos = api.list_repos_page(per_page=100, page=page)
         cloned_set = get_all_cloned_repos(workspace_path)
         
+        from services.repo_registry import load_registry
+        registry = load_registry()
+        
+        # Build a fast mapping of owner/repo to path to grab the local branch
+        cloned_paths = {}
+        for info in registry.values():
+            owner = info.get("owner")
+            repo = info.get("repo")
+            path = info.get("path")
+            if owner and repo and path:
+                cloned_paths[f"{owner.lower()}/{repo.lower()}"] = path
+                
+        def get_local_branch(repo_path):
+            import subprocess
+            try:
+                res = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path, capture_output=True, text=True, timeout=2)
+                if res.returncode == 0:
+                    return res.stdout.strip()
+            except:
+                pass
+            return ""
+        
         simplified = [
             {
                 "name": r.get("name"),
@@ -70,6 +92,7 @@ def list_repos(api: GitHubAPI, workspace_path: str = None, page: int = 1) -> dic
                 "updated_at": r.get("updated_at"),
                 "language": r.get("language") or "N/A",
                 "is_cloned": f"{r.get('owner', {}).get('login', '').lower()}/{r.get('name', '').lower()}" in cloned_set,
+                "current_branch": get_local_branch(cloned_paths.get(f"{r.get('owner', {}).get('login', '').lower()}/{r.get('name', '').lower()}", "")) if f"{r.get('owner', {}).get('login', '').lower()}/{r.get('name', '').lower()}" in cloned_set else r.get("default_branch", "main"),
                 "owner": r.get("owner", {}).get("login", "")
             }
             for r in repos

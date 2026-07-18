@@ -136,6 +136,11 @@
           "default": true,
           "description": "Automatically push after a successful commit in the Git Actions view."
         },
+        "github-automator.pinActiveRepositoryToTop": {
+          "type": "boolean",
+          "default": true,
+          "description": "Always move the active repository to the top of the list."
+        },
         "github-automator.anthropicModel": {
           "type": "string",
           "default": "claude-3-5-haiku-latest",

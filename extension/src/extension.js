@@ -70,6 +70,9 @@ class RepositoriesWebviewProvider {
         case 'updateDescription':
           await updateRepoDescription(message.payload && message.payload.repoName, message.payload && message.payload.owner, message.payload && message.payload.description);
           break;
+        case 'manageBranch':
+          await manageBranchCommand(message.payload);
+          break;
         default:
           break;
       }
@@ -107,8 +110,18 @@ class RepositoriesWebviewProvider {
   }
 
   setWorkspace(name) {
+    const oldWorkspace = this.state.workspace;
     this.state.workspace = name || '';
-    this.update();
+    if (this.view && oldWorkspace !== this.state.workspace) {
+      const config = vscode.workspace.getConfiguration('github-automator');
+      const pinActive = config.get('pinActiveRepositoryToTop', true);
+      this.view.webview.postMessage({ 
+        command: 'workspaceChanged', 
+        oldWorkspace, 
+        newWorkspace: this.state.workspace,
+        pinActive 
+      });
+    }
   }
 
   async refreshState() {
@@ -133,11 +146,23 @@ class RepositoriesWebviewProvider {
 
   getHtml() {
     const state = this.state;
+    const config = vscode.workspace.getConfiguration('github-automator');
+    const pinActive = config.get('pinActiveRepositoryToTop', true);
+    
+    let displayRepos = [...state.repos];
+    if (pinActive && state.workspace) {
+      const activeIdx = displayRepos.findIndex(r => r.name === state.workspace);
+      if (activeIdx > -1) {
+        const [activeRepo] = displayRepos.splice(activeIdx, 1);
+        displayRepos.unshift(activeRepo);
+      }
+    }
+
     const reposHtml = state.loading
       ? '<div class="muted">Loading repositories…</div>'
       : state.authenticated
-        ? (state.repos.length
-          ? `<div class="repo-grid">${state.repos.map(repo => this.renderRepoCard(repo)).join('')}</div>`
+        ? (displayRepos.length
+          ? `<div class="repo-grid">${displayRepos.map(repo => this.renderRepoCard(repo)).join('')}</div>`
           : '<div class="muted">No repositories found for this account.</div>')
         : this.renderLoginCard();
 
@@ -164,7 +189,8 @@ class RepositoriesWebviewProvider {
           button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
           .error { color: #f48771; font-size: 12px; }
           .repo-grid { display: flex; flex-direction: column; gap: 8px; }
-          .repo-card { background: #252526; border: 1px solid #3c3c3c; border-radius: 6px; padding: 10px; }
+          .repo-card { background: #252526; border: 1px solid transparent; border-radius: 6px; padding: 10px; transition: border-color 0.2s ease-in-out; }
+          .repo-card.active { border: 1px solid var(--vscode-focusBorder); }
           .repo-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
           .repo-title-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; flex: 1 1 auto; }
           .repo-name { font-weight: 600; margin-bottom: 4px; display: inline-block; white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; }
@@ -173,6 +199,8 @@ class RepositoriesWebviewProvider {
           .actions { display: flex; gap: 8px; margin-top: 8px; }
           .actions button { width: auto; flex: 1; }
           .pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 6px; border-radius: 999px; background: rgba(255,255,255,0.06); }
+          .branch-badge { cursor: pointer; transition: background-color 0.15s ease, color 0.15s ease; }
+          .branch-badge:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(255,255,255,0.15)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); }
           .search-container { position: relative; width: 100%; display: flex; align-items: center; }
           .search-icon { position: absolute; left: 10px; display: flex; align-items: center; color: var(--vscode-icon-foreground); }
           #repoSearch { width: 100%; padding: 8px 10px 8px 32px; border-radius: 4px; background: var(--vscode-input-background, #2d2d2d); border: 1px solid transparent; color: var(--vscode-input-foreground); font-family: inherit; transition: border-color 0.1s; outline: none; }
@@ -257,6 +285,23 @@ class RepositoriesWebviewProvider {
               if (element) {
                 element.remove();
               }
+            } else if (message.command === 'workspaceChanged') {
+              if (message.oldWorkspace) {
+                const oldCard = document.getElementById('repo-card-' + message.oldWorkspace);
+                if (oldCard) oldCard.classList.remove('active');
+              }
+              if (message.newWorkspace) {
+                const newCard = document.getElementById('repo-card-' + message.newWorkspace);
+                if (newCard) {
+                  newCard.classList.add('active');
+                  if (message.pinActive) {
+                    const grid = document.querySelector('.repo-grid');
+                    if (grid) {
+                      grid.prepend(newCard);
+                    }
+                  }
+                }
+              }
             }
           });
 
@@ -291,6 +336,15 @@ class RepositoriesWebviewProvider {
   }
 
   renderRepoCard(repo) {
+    const languageColors = {
+      JavaScript: '#f1e05a', TypeScript: '#3178c6', Python: '#3572A5', Java: '#b07219',
+      'C++': '#f34b7d', C: '#555555', 'C#': '#178600', Ruby: '#701516', Go: '#00ADD8',
+      Rust: '#dea584', PHP: '#4F5D95', HTML: '#e34c26', CSS: '#563d7c', Swift: '#F05138',
+      Kotlin: '#A97BFF', Dart: '#00B4AB', Shell: '#89e051', Vue: '#41b883',
+      ObjectiveC: '#438eff', Lua: '#000080', Scala: '#c22d40', Perl: '#0298c3',
+      Haskell: '#5e5086', Elixir: '#6e4a7e', Clojure: '#db5855'
+    };
+
     const lockSvg = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="margin-right:2px"><path d="M4 6V4a4 4 0 1 1 8 0v2h1a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h1zm2-2v2h4V4a2 2 0 1 0-4 0z"/></svg>`;
     const globeSvg = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="margin-right:2px; color: var(--vscode-icon-foreground);"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm.5 1.03A7.03 7.03 0 0 1 14.97 8H8.5V1.03zM7.5 1.03V8H1.03A7.03 7.03 0 0 1 7.5 1.03zM1.03 9H7.5v6.97A7.03 7.03 0 0 1 1.03 9zM8.5 14.97V9h6.47a7.03 7.03 0 0 1-6.47 5.97z"/></svg>`;
     const starSvg = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="margin-right:2px"><path d="M8 1L10.3 5.6L15.4 6.3L11.7 9.9L12.6 15L8 12.6L3.4 15L4.3 9.9L0.6 6.3L5.7 5.6L8 1z"/></svg>`;
@@ -300,20 +354,28 @@ class RepositoriesWebviewProvider {
 
     const visibility = repo.private ? `${lockSvg} Private` : `${globeSvg} Public`;
     const description = repo.description ? repo.description : 'No description provided.';
-    const language = repo.language ? repo.language : '';
-    const stars = repo.stargazers_count ? `<span class="pill">${starSvg} ${repo.stargazers_count}</span>` : '';
+    
+    const langName = repo.language || 'N/A';
+    const langColor = languageColors[langName] || '#888888';
+    const languageHtml = `<span class="pill" style="display:flex; align-items:center;"><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background-color:${langColor}; margin-right:4px;"></span>${langName}</span>`;
+    
     const repoName = (repo.name || 'Repository').replace(/'/g, "\\'");
     const cloneUrl = (repo.clone_url || '').replace(/'/g, "\\'");
+    const owner = typeof repo.owner === 'string' ? repo.owner : (repo.owner && repo.owner.login ? repo.owner.login : '');
+
+    const branchName = repo.current_branch || 'main';
+    const branchSvg = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="margin-right:2px"><path fill-rule="evenodd" d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6A2.5 2.5 0 0110 8.5H6a1 1 0 00-1 1v1.378a2.251 2.251 0 11-1.5 0V4.242a2.251 2.251 0 111.5 0v3.758h4a1 1 0 001-1V5.372a2.25 2.25 0 01-1.5-2.122zM3.5 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zM4.25 12a.75.75 0 10-1.5 0 .75.75 0 001.5 0z"/></svg>`;
+    const branchHtml = `<span class="pill branch-badge" onclick="post('manageBranch', { repoName: '${repoName}', owner: '${owner.replace(/'/g, "\\\\'")}', isCloned: ${repo.is_cloned}, cloneUrl: '${cloneUrl}', currentBranch: '${branchName}' })" title="Manage Branches">${branchSvg}${branchName}</span>`;
+    
+    const stars = repo.stargazers_count ? `<span class="pill">${starSvg} ${repo.stargazers_count}</span>` : '';
     const isActive = repo.name && repo.name === this.state.workspace;
     const activeClass = isActive ? ' active' : '';
-    const playSvg = isActive ? `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="margin-right:4px"><path d="M5 2l6 6-6 6z"/></svg>` : '';
-    const owner = typeof repo.owner === 'string' ? repo.owner : (repo.owner && repo.owner.login ? repo.owner.login : '');
     const cloneIcon = repo.is_cloned ? folderSvg : cloudSvg;
 
     return `<div class="repo-card${activeClass}" id="repo-card-${repoName}">
       <div class="repo-header" style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
         <div class="repo-title-group" style="display: flex; align-items: center; gap: 8px;">
-          <div class="repo-name" style="font-weight: 600; display: flex; align-items: center; color: var(--vscode-textLink-foreground);">${playSvg} ${repo.name || 'Repository'}</div>
+          <div class="repo-name" style="font-weight: 600; display: flex; align-items: center; color: var(--vscode-textLink-foreground);">${repo.name || 'Repository'}</div>
           <span class="pill" style="display: flex; align-items: center;">${visibility}</span>
         </div>
         <div class="repo-icon-container" style="width: 28px; text-align: center; flex-shrink: 0; display: flex; justify-content: center; align-items: center;">
@@ -324,8 +386,9 @@ class RepositoriesWebviewProvider {
       </div>
       <div class="muted" style="margin-top: 8px; margin-bottom: 8px; cursor: pointer; white-space: pre-wrap;" title="Double-click to edit description" id="desc-${repoName}" data-owner="${owner.replace(/'/g, "\\\\'")}" ondblclick="editDescription('${repoName}', '${owner.replace(/'/g, "\\\\'")}', this)">${description}</div>
       <div class="repo-meta" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-        <div style="display:flex; gap:8px;">
-          ${language ? `<span class="pill">${language}</span>` : ''}
+        <div style="display:flex; gap:8px; align-items:center;">
+          ${languageHtml}
+          ${branchHtml}
           ${stars}
         </div>
         <button class="repo-action" onclick="post('deleteRepo', { repoName: '${repoName}', owner: '${owner.replace(/'/g, "\\\\'")}' })" title="Delete repository">
@@ -756,14 +819,17 @@ async function createRepoCommand() {
     await vscode.window.showInformationMessage(`Created repository ${result.name}.`);
     
     if (reposViewProvider) {
-      const repoHTML = reposViewProvider.renderRepoCard({
+      const newRepo = {
         name: result.name,
         private: privateValue,
         description: description || '',
         clone_url: result.clone_url,
         owner: result.owner || '',
         is_cloned: false
-      });
+      };
+      // Add to in-memory state so sidebar switch doesn't lose it
+      reposViewProvider.state.repos.unshift(newRepo);
+      const repoHTML = reposViewProvider.renderRepoCard(newRepo);
       if (reposViewProvider.view) {
         reposViewProvider.view.webview.postMessage({ command: 'repoCreated', payload: { html: repoHTML } });
       }
@@ -801,8 +867,11 @@ async function deleteRepoCommand() {
     }
 
     await vscode.window.showInformationMessage(`Deleted repository ${repoName}.`);
-    if (reposViewProvider && reposViewProvider.view) {
-      reposViewProvider.view.webview.postMessage({ command: 'repoDeleted', payload: { repoName } });
+    if (reposViewProvider) {
+      reposViewProvider.state.repos = reposViewProvider.state.repos.filter(r => r.name !== repoName);
+      if (reposViewProvider.view) {
+        reposViewProvider.view.webview.postMessage({ command: 'repoDeleted', payload: { repoName } });
+      }
     }
   } catch (error) {
     log(`deleteRepo failed: ${error && error.message ? error.message : error}`);
@@ -846,8 +915,12 @@ async function deleteRepoFromCard(repoName, owner) {
     }
 
     await vscode.window.showInformationMessage(`Deleted repository ${repoName}.`);
-    if (reposViewProvider && reposViewProvider.view) {
-      reposViewProvider.view.webview.postMessage({ command: 'repoDeleted', payload: { repoName } });
+    if (reposViewProvider) {
+      // Remove from in-memory state so sidebar switch doesn't bring it back
+      reposViewProvider.state.repos = reposViewProvider.state.repos.filter(r => r.name !== repoName);
+      if (reposViewProvider.view) {
+        reposViewProvider.view.webview.postMessage({ command: 'repoDeleted', payload: { repoName } });
+      }
     }
   } catch (error) {
     log(`deleteRepoFromCard failed: ${error && error.message ? error.message : error}`);
@@ -959,6 +1032,262 @@ async function initializeRepoCommand() {
   }
 }
 
+async function manageBranchCommand(payload) {
+  if (!payload || !payload.repoName) {
+    return;
+  }
+
+  // 1. If not cloned, show friendly message with option to clone
+  if (!payload.isCloned) {
+    const selection = await vscode.window.showInformationMessage(
+      "Branch management is only available for locally cloned repositories.",
+      "Clone Repository"
+    );
+    if (selection === "Clone Repository") {
+      await openRepoCommand(payload.repoName, payload.cloneUrl);
+    }
+    return;
+  }
+
+  const currentBranch = payload.currentBranch || 'main';
+
+  // 2. Check for detached HEAD state
+  if (currentBranch === 'HEAD') {
+    vscode.window.showErrorMessage("Branch management is not available in a detached HEAD state.");
+    return;
+  }
+
+  // 3. Fetch the repository path
+  const pathResult = await runBackendScript('managers/repo_manager.py', {
+    action: 'check_repo_exists',
+    repo_name: payload.repoName
+  });
+
+  if (!pathResult || !pathResult.success || !pathResult.exists || !pathResult.path) {
+    const selection = await vscode.window.showInformationMessage(
+      "Branch management is only available for locally cloned repositories.",
+      "Clone Repository"
+    );
+    if (selection === "Clone Repository") {
+      await openRepoCommand(payload.repoName, payload.cloneUrl);
+    }
+    return;
+  }
+
+  const repoPath = pathResult.path;
+
+  // 4. Retrieve branches from backend
+  const branchesResult = await runBackendScript('managers/local_repo.py', {
+    action: 'list_branches',
+    repo_path: repoPath
+  });
+
+  if (!branchesResult || !branchesResult.success) {
+    vscode.window.showErrorMessage(branchesResult.message || 'Failed to list branches');
+    return;
+  }
+
+  const branches = branchesResult.branches || [];
+
+  // 5. Determine Quick Pick options based on number of local branches
+  const options = [];
+  if (branches.length > 1) {
+    options.push({
+      label: '🔀 Switch Branch',
+      description: 'Checkout an existing local branch'
+    });
+  }
+  options.push({
+    label: '➕ Create Branch',
+    description: 'Create a new branch from the current branch'
+  });
+  if (branches.length > 1) {
+    options.push({
+      label: '🔀 Merge Branch',
+      description: `Merge another local branch into ${currentBranch}`
+    });
+    options.push({
+      label: '🗑 Delete Branch',
+      description: 'Delete an inactive local branch'
+    });
+  }
+
+  const pick = await vscode.window.showQuickPick(options, {
+    title: 'Branch Management',
+    placeHolder: 'Select an option'
+  });
+
+  if (!pick) {
+    return;
+  }
+
+  if (pick.label === '🔀 Switch Branch') {
+    // Show branches Quick Pick
+    const branchItems = branches.map(b => {
+      const isActive = b === currentBranch;
+      return {
+        label: isActive ? `✓ ${b}` : b,
+        description: isActive ? '(current branch)' : '',
+        branchName: b
+      };
+    });
+
+    const selectedBranchItem = await vscode.window.showQuickPick(branchItems, {
+      placeHolder: 'Select branch to switch to'
+    });
+
+    if (!selectedBranchItem) {
+      return;
+    }
+
+    // Switch branch
+    const switchResult = await runBackendScript('managers/local_repo.py', {
+      action: 'switch_branch',
+      repo_path: repoPath,
+      branch: selectedBranchItem.branchName
+    });
+
+    if (switchResult && switchResult.success) {
+      vscode.window.showInformationMessage(`Checked out branch: ${selectedBranchItem.branchName}`);
+      await refreshReposCommand();
+    } else {
+      vscode.window.showErrorMessage(switchResult.message || `Failed to checkout branch: ${selectedBranchItem.branchName}`);
+    }
+
+  } else if (pick.label === '➕ Create Branch') {
+    // Open Input Box for new branch name
+    const newBranchName = await vscode.window.showInputBox({
+      placeHolder: 'Enter new branch name...',
+      prompt: 'Create a new branch from the current branch.',
+      ignoreFocusOut: true,
+      validateInput: (value) => {
+        if (!value || !value.trim()) {
+          return 'Branch name cannot be empty';
+        }
+        const branchReg = /^(?!-)(?!.*?\.\.)(?!.*?\/\.)[^\s~^:?*\[\\@\{\}]+(?<!\.lock)(?<!\/)(?<!\.)$/;
+        if (!branchReg.test(value)) {
+          return 'Invalid git branch name format';
+        }
+        if (branches.includes(value.trim())) {
+          return 'A branch with this name already exists locally';
+        }
+        return null;
+      }
+    });
+
+    if (!newBranchName) {
+      return;
+    }
+
+    // Create branch
+    const createResult = await runBackendScript('managers/local_repo.py', {
+      action: 'create_branch',
+      repo_path: repoPath,
+      branch: newBranchName.trim()
+    });
+
+    if (createResult && createResult.success) {
+      vscode.window.showInformationMessage(`Created and checked out branch: ${newBranchName.trim()}`);
+      await refreshReposCommand();
+    } else {
+      vscode.window.showErrorMessage(createResult.message || `Failed to create branch: ${newBranchName.trim()}`);
+    }
+  } else if (pick.label === '🔀 Merge Branch') {
+    const eligibleBranches = branches.filter(b => b !== currentBranch);
+    if (eligibleBranches.length === 0) {
+      vscode.window.showInformationMessage('No eligible local branches to merge.');
+      return;
+    }
+
+    const mergeItems = eligibleBranches.map(b => ({
+      label: b,
+      branchName: b
+    }));
+
+    const selectedMergeItem = await vscode.window.showQuickPick(mergeItems, {
+      title: 'Merge Branch',
+      placeHolder: `Select branch to merge into ${currentBranch}`
+    });
+
+    if (!selectedMergeItem) {
+      return;
+    }
+
+    const sourceBranch = selectedMergeItem.branchName;
+    const confirm = await vscode.window.showWarningMessage(
+      `Merge ${sourceBranch} into ${currentBranch}?`,
+      { modal: true },
+      'Merge',
+      'Cancel'
+    );
+
+    if (confirm !== 'Merge') {
+      return;
+    }
+
+    const mergeResult = await runBackendScript('managers/local_repo.py', {
+      action: 'merge_branch',
+      repo_path: repoPath,
+      branch: sourceBranch
+    });
+
+    if (mergeResult && mergeResult.success) {
+      vscode.window.showInformationMessage(`Successfully merged ${sourceBranch} into ${currentBranch}.`);
+      await refreshReposCommand();
+    } else if (mergeResult && mergeResult.conflict) {
+      vscode.window.showErrorMessage("Merge conflicts detected. Please manually resolve conflicts in VS Code, then commit and push. Or run 'git merge --abort' to cancel.");
+      await refreshReposCommand();
+    } else {
+      vscode.window.showErrorMessage(mergeResult.message || `Failed to merge ${sourceBranch} into ${currentBranch}.`);
+    }
+  } else if (pick.label === '🗑 Delete Branch') {
+    const deletableBranches = branches.filter(b => b !== currentBranch);
+    if (deletableBranches.length === 0) {
+      vscode.window.showInformationMessage('No eligible local branches to delete.');
+      return;
+    }
+
+    const deleteItems = deletableBranches.map(b => ({
+      label: b,
+      branchName: b
+    }));
+
+    const selectedDeleteItem = await vscode.window.showQuickPick(deleteItems, {
+      title: 'Delete Branch',
+      placeHolder: 'Select branch to delete'
+    });
+
+    if (!selectedDeleteItem) {
+      return;
+    }
+
+    const branchToDelete = selectedDeleteItem.branchName;
+    const confirm = await vscode.window.showWarningMessage(
+      `Delete branch ${branchToDelete}? This action cannot be undone.`,
+      { modal: true },
+      'Delete',
+      'Cancel'
+    );
+
+    if (confirm !== 'Delete') {
+      return;
+    }
+
+    const deleteResult = await runBackendScript('managers/local_repo.py', {
+      action: 'delete_branch',
+      repo_path: repoPath,
+      branch: branchToDelete
+    });
+
+    if (deleteResult && deleteResult.success) {
+      vscode.window.showInformationMessage(`Successfully deleted branch ${branchToDelete}.`);
+      await refreshReposCommand();
+    } else {
+      vscode.window.showErrorMessage(deleteResult.message || `Failed to delete branch ${branchToDelete}.`);
+    }
+  }
+}
+
 async function commitAndPushCommand(payload) {
   try {
     const repoPath = getWorkspacePath();
@@ -993,6 +1322,7 @@ async function commitAndPushCommand(payload) {
         return;
       }
 
+      let commitResult;
       await vscode.window.withProgress({
         location: vscode.ProgressLocation.Notification,
         title: 'Committing changes',
@@ -1001,7 +1331,7 @@ async function commitAndPushCommand(payload) {
         const config = vscode.workspace.getConfiguration('github-automator');
         const autoPush = config.get('autoPush', true);
         const token = await getStoredSecret(AUTH_SECRET_KEY);
-        const announcement = await runBackendScript('managers/commit_manager.py', {
+        commitResult = await runBackendScript('managers/commit_manager.py', {
           action: 'commit_and_push',
           repo_path: repoPath,
           message: message.trim(),
@@ -1010,13 +1340,16 @@ async function commitAndPushCommand(payload) {
           auto_push: autoPush
         });
 
-        if (!announcement || !announcement.success) {
-          const detail = announcement && announcement.message ? announcement.message : 'The commit workflow failed.';
+        if (!commitResult || !commitResult.success) {
+          const detail = commitResult && commitResult.message ? commitResult.message : 'The commit workflow failed.';
           throw new Error(detail);
         }
-
-        await vscode.window.showInformationMessage(announcement.message || 'Commit and push completed.');
       });
+
+      // Show success message outside withProgress so the progress notification closes immediately
+      if (commitResult && commitResult.success) {
+        await vscode.window.showInformationMessage(commitResult.message || 'Commit and push completed.');
+      }
     };
 
     inputBox.onDidAccept(async () => {
@@ -1238,6 +1571,14 @@ function activate(context) {
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('github-automator.repoView', reposViewProvider),
     vscode.window.registerWebviewViewProvider('github-automator.actionsView', actionsViewProvider)
+  );
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration('github-automator.pinActiveRepositoryToTop')) {
+        reposViewProvider.update();
+      }
+    })
   );
 
   const commands = [

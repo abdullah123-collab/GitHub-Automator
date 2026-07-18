@@ -240,6 +240,32 @@ if __name__ == "__main__":
         elif action == "get_conflicted_files":
             result = get_conflicted_files(repo_path)
             print(json.dumps(result))
+        elif action == "list_branches":
+            ok, output = _run(["git", "branch", "--format=%(refname:short)"], cwd=repo_path)
+            if ok:
+                branches = [b.strip() for b in output.splitlines() if b.strip()]
+                print(json.dumps({"success": True, "branches": branches}))
+            else:
+                print(json.dumps({"success": False, "branches": [], "message": output}))
+        elif action == "switch_branch":
+            branch = args.get("branch", "")
+            ok, msg = _run(["git", "checkout", branch], cwd=repo_path)
+            print(json.dumps({"success": ok, "message": msg}))
+        elif action == "create_branch":
+            branch = args.get("branch", "")
+            ok, msg = _run(["git", "checkout", "-b", branch], cwd=repo_path)
+            print(json.dumps({"success": ok, "message": msg}))
+        elif action == "merge_branch":
+            branch = args.get("branch", "")
+            ok, msg = _run(["git", "merge", branch], cwd=repo_path)
+            conflict = False
+            if not ok and ("conflict" in msg.lower() or "merge failed" in msg.lower()):
+                conflict = True
+            print(json.dumps({"success": ok, "message": msg, "conflict": conflict}))
+        elif action == "delete_branch":
+            branch = args.get("branch", "")
+            ok, msg = _run(["git", "branch", "-D", branch], cwd=repo_path)
+            print(json.dumps({"success": ok, "message": msg}))
         else:
             print(json.dumps({"success": False, "error": f"Unknown action: {action}"}))
     except Exception as e:
