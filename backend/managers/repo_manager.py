@@ -90,6 +90,8 @@ def list_repos(api: GitHubAPI, workspace_path: str = None, page: int = 1) -> dic
                 "url": r.get("html_url"),
                 "clone_url": r.get("clone_url"),
                 "updated_at": r.get("updated_at"),
+                "pushed_at": r.get("pushed_at"),
+                "stargazers_count": r.get("stargazers_count") or 0,
                 "language": r.get("language") or "N/A",
                 "is_cloned": f"{r.get('owner', {}).get('login', '').lower()}/{r.get('name', '').lower()}" in cloned_set,
                 "current_branch": get_local_branch(cloned_paths.get(f"{r.get('owner', {}).get('login', '').lower()}/{r.get('name', '').lower()}", "")) if f"{r.get('owner', {}).get('login', '').lower()}/{r.get('name', '').lower()}" in cloned_set else r.get("default_branch", "main"),

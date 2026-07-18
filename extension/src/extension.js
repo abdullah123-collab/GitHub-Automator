@@ -28,6 +28,9 @@ class RepositoriesWebviewProvider {
     this.view = webviewView;
     webviewView.webview.options = { enableScripts: true };
     webviewView.webview.onDidReceiveMessage(message => this.handleMessage(message));
+    webviewView.onDidChangeVisibility(() => {
+      webviewView.webview.postMessage({ command: 'closePopovers' });
+    });
 
     // If repos are already loaded from a previous session, just re-render
     // the cached state instead of calling the GitHub API again.
@@ -72,6 +75,12 @@ class RepositoriesWebviewProvider {
           break;
         case 'manageBranch':
           await manageBranchCommand(message.payload);
+          break;
+        case 'popoverAction':
+          await handlePopoverAction(message.payload);
+          break;
+        case 'repoOptionsAction':
+          await handleRepoOptionsAction(message.payload);
           break;
         default:
           break;
@@ -144,13 +153,55 @@ class RepositoriesWebviewProvider {
     this.view.webview.html = this.getHtml();
   }
 
-  getHtml() {
+  getReposHtml() {
     const state = this.state;
-    const config = vscode.workspace.getConfiguration('github-automator');
-    const pinActive = config.get('pinActiveRepositoryToTop', true);
-    
     let displayRepos = [...state.repos];
-    if (pinActive && state.workspace) {
+
+    // 1. Filtering
+    const visibility = state.visibilityFilter || 'all';
+    if (visibility === 'public') {
+      displayRepos = displayRepos.filter(r => !r.private);
+    } else if (visibility === 'private') {
+      displayRepos = displayRepos.filter(r => r.private);
+    }
+
+    const lang = state.languageFilter || 'all';
+    if (lang !== 'all') {
+      if (lang === 'N/A') {
+        displayRepos = displayRepos.filter(r => !r.language || r.language === 'N/A');
+      } else if (lang === 'Other') {
+        const commonLangs = ['Python', 'TypeScript', 'JavaScript', 'HTML', 'CSS', 'C++', 'Java', 'Go', 'Rust', 'PHP', 'C#'];
+        displayRepos = displayRepos.filter(r => r.language && r.language !== 'N/A' && !commonLangs.includes(r.language));
+      } else {
+        displayRepos = displayRepos.filter(r => r.language === lang);
+      }
+    }
+
+    // 2. Sorting
+    const sorting = state.sortOption || 'name';
+    if (sorting === 'name') {
+      displayRepos.sort((a, b) => (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase()));
+    } else if (sorting === 'lastCommit') {
+      displayRepos.sort((a, b) => {
+        const da = new Date(a.pushed_at || a.updated_at || 0);
+        const db = new Date(b.pushed_at || b.updated_at || 0);
+        return db - da;
+      });
+    } else if (sorting === 'recentlyOpened') {
+      const openedList = extensionContext ? extensionContext.workspaceState.get('recently-opened-repos') || [] : [];
+      displayRepos.sort((a, b) => {
+        let idxA = openedList.indexOf(a.name);
+        let idxB = openedList.indexOf(b.name);
+        if (idxA === -1) idxA = Infinity;
+        if (idxB === -1) idxB = Infinity;
+        return idxA - idxB;
+      });
+    } else if (sorting === 'stars') {
+      displayRepos.sort((a, b) => (b.stargazers_count || 0) - (a.stargazers_count || 0));
+    }
+
+    // 3. Pinning active workspace at top
+    if (state.pinActive !== false && state.workspace) {
       const activeIdx = displayRepos.findIndex(r => r.name === state.workspace);
       if (activeIdx > -1) {
         const [activeRepo] = displayRepos.splice(activeIdx, 1);
@@ -158,12 +209,23 @@ class RepositoriesWebviewProvider {
       }
     }
 
+    if (state.repos.length === 0) {
+      return '<div class="muted" style="padding-top: 10px;">No repositories found.</div>';
+    }
+
+    if (displayRepos.length === 0) {
+      return '<div class="muted" style="padding-top: 10px;">No repositories match the current filters.</div>';
+    }
+
+    return `<div class="repo-grid">${displayRepos.map(repo => this.renderRepoCard(repo)).join('')}</div>`;
+  }
+
+  getHtml() {
+    const state = this.state;
     const reposHtml = state.loading
       ? '<div class="muted">Loading repositories…</div>'
       : state.authenticated
-        ? (displayRepos.length
-          ? `<div class="repo-grid">${displayRepos.map(repo => this.renderRepoCard(repo)).join('')}</div>`
-          : '<div class="muted">No repositories found for this account.</div>')
+        ? this.getReposHtml()
         : this.renderLoginCard();
 
     return `<!DOCTYPE html>
@@ -205,6 +267,84 @@ class RepositoriesWebviewProvider {
           .search-icon { position: absolute; left: 10px; display: flex; align-items: center; color: var(--vscode-icon-foreground); }
           #repoSearch { width: 100%; padding: 8px 10px 8px 32px; border-radius: 4px; background: var(--vscode-input-background, #2d2d2d); border: 1px solid transparent; color: var(--vscode-input-foreground); font-family: inherit; transition: border-color 0.1s; outline: none; }
           #repoSearch:focus { border: 1px solid var(--vscode-focusBorder, #007fd4); }
+
+          /* Popover Styles */
+          .popover {
+            position: fixed;
+            background: var(--vscode-menu-background, rgba(37, 37, 38, 0.96));
+            border: 1px solid var(--vscode-menu-border, #3c3c3c);
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            padding: 4px 0;
+            z-index: 1000000;
+            min-width: 175px;
+            opacity: 0;
+            transform: scale(0.96) translateY(-4px);
+            transform-origin: top left;
+            transition: opacity 150ms cubic-bezier(0.4, 0, 0.2, 1), transform 150ms cubic-bezier(0.4, 0, 0.2, 1);
+            pointer-events: none;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            color: var(--vscode-menu-foreground, var(--vscode-foreground));
+          }
+          .popover.visible {
+            opacity: 1;
+            transform: scale(1) translateY(0);
+            pointer-events: auto;
+          }
+          
+          .popover.submenu {
+            transform: translateX(8px);
+            transition: opacity 130ms cubic-bezier(0.4, 0, 0.2, 1), transform 130ms cubic-bezier(0.4, 0, 0.2, 1);
+          }
+          .popover.submenu.slide-left {
+            transform: translateX(-8px);
+          }
+          .popover.submenu.visible {
+            opacity: 1;
+            transform: translateX(0);
+          }
+
+          .popover-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.1s ease, color 0.1s ease;
+            color: var(--vscode-menu-foreground, var(--vscode-foreground));
+          }
+          .popover-item:hover,
+          .popover-item.focused,
+          .popover-item.active-parent {
+            background: var(--vscode-menu-selectionBackground, var(--vscode-list-activeSelectionBackground, #0e639c));
+            color: var(--vscode-menu-selectionForeground, #ffffff);
+            outline: none;
+          }
+          .popover-item.disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            pointer-events: none;
+          }
+          .popover-item-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+          .popover-item-label svg {
+            flex-shrink: 0;
+          }
+          .popover-divider {
+            height: 1px;
+            background: var(--vscode-menu-separatorBackground, rgba(255, 255, 255, 0.08));
+            margin: 4px 6px;
+          }
+          .branch-badge.active-badge {
+            background: var(--vscode-button-background, #0e639c) !important;
+            color: var(--vscode-button-foreground, #ffffff) !important;
+            outline: 1px solid var(--vscode-focusBorder, #007fd4) !important;
+          }
         </style>
       </head>
       <body>
@@ -215,6 +355,7 @@ class RepositoriesWebviewProvider {
             </span>
             <input id="repoSearch" placeholder="Search repositories..." />
           </div>
+          <div id="searchEmpty" class="muted" style="display: none; padding-top: 10px;">No repositories match your search.</div>
           ${reposHtml}
         </div>
         <script>
@@ -228,6 +369,448 @@ class RepositoriesWebviewProvider {
           function refresh() { post('refreshRepos'); }
           function commitAndPush() { post('commitAndPush'); }
           function aiGenerate() { post('aiGenerate'); }
+
+          const icons = {
+            switchBranch: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6A2.5 2.5 0 0110 8.5H6a1 1 0 00-1 1v1.378a2.251 2.251 0 11-1.5 0V4.242a2.251 2.251 0 111.5 0v3.758h4a1 1 0 001-1V5.372a2.25 2.25 0 01-1.5-2.122zM3.5 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zM4.25 12a.75.75 0 10-1.5 0 .75.75 0 001.5 0z"/></svg>',
+            createBranch: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 7H9V2H7v5H2v2h5v5h2V9h5z"/></svg>',
+            mergeBranch: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M10 1.75a1.75 1.75 0 113.5 0 1.75 1.75 0 01-3.5 0zM11.75 3a.5.5 0 100-1 .5.5 0 000 1zm-7 5.25a1.75 1.75 0 11-3.5 0 1.75 1.75 0 013.5 0zM3 9.5a.5.5 0 100-1 .5.5 0 000 1zm8.75.75a1.75 1.75 0 113.5 0 1.75 1.75 0 01-3.5 0zm1.75 1a.5.5 0 100-1 .5.5 0 000 1zm-9.5-6h2v1h-2a2.5 2.5 0 00-2.5 2.5v1.25H2.5V8.75A3.5 3.5 0 016 5.25zM11.75 5v3.25A2.5 2.5 0 019.25 11h-2v-1h2a1.5 1.5 0 001.5-1.5V5h1z"/></svg>',
+            deleteBranch: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M10 2V1H6v1H3v1h10V2h-3zM4.5 4h7v9.5a1.5 1.5 0 01-1.5 1.5h-4a1.5 1.5 0 01-2.12 0L1.44 7.81A1.5 1.5 0 011 6.75V1.5A1.5 1.5 0 012.5 0zm1.06 1.44A.5.5 0 002 2.5v4.25a.5.5 0 00.15.35l7.75 7.75a.5.5 0 00.7 0l4.25-4.25a.5.5 0 000-.7l-7.75-7.75A.5.5 0 006.75 2h-4.25zm.94.56a1 1 0 11-2 0 1 1 0 012 0z"/></svg>',
+            compareBranches: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M4 1.75C4 .784 4.784 0 5.75 0h5.586a1 1 0 01.707.293l3.664 3.664a1 1 0 01.293.707v9.586A1.75 1.75 0 0114.25 16H5.75A1.75 1.75 0 014 14.25V1.75zM5.75 1.5a.25.25 0 00-.25.25v12.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25v-8.5H11.5a1 1 0 01-1-1V1.5H5.75zm5.75.31V4.5h2.69L11.5 1.81zM7 6h6v1H7V6zm0 3h6v1H7V9zm0 3h4v1H7v-1z"/></svg>',
+            history: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M1.5 8a6.5 6.5 0 119.34 5.92l-.56-.83A5.5 5.5 0 102.5 8H5V7H1v4h1V9a6.5 6.5 0 01-.5-1zm6.5-4a.5.5 0 01.5.5v3.29l1.85 1.86-.7.71-2-2A.5.5 0 017 8V4.5a.5.5 0 01.5-.5z"/></svg>',
+            chevronRight: '<svg class="codicon" width="10" height="10" viewBox="0 0 16 16" fill="currentColor" style="margin-left: 8px;"><path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 01.708 0l6 6a.5.5 0 010 .708l-6 6a.5.5 0 01-.708-.708L10.293 8 4.646 2.354a.5.5 0 010-.708z"/></svg>',
+            fetch: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M7.47 10.78a.75.75 0 001.06 0l3.75-3.75a.75.75 0 00-1.06-1.06L8.75 8.44V1.75a.75.75 0 00-1.5 0v6.69L4.78 5.97a.75.75 0 00-1.06 1.06l3.75 3.75zM14.25 12H1.75a.75.75 0 000 1.5h12.5a.75.75 0 000-1.5z"/></svg>',
+            pull: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M7.47 10.78a.75.75 0 001.06 0l3.75-3.75a.75.75 0 00-1.06-1.06L8.75 8.44V1.75a.75.75 0 00-1.5 0v6.69L4.78 5.97a.75.75 0 00-1.06 1.06l3.75 3.75zM14.25 12H1.75a.75.75 0 000 1.5h12.5a.75.75 0 000-1.5z"/></svg>',
+            push: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M8.53 1.22a.75.75 0 00-1.06 0L3.72 4.97a.75.75 0 001.06 1.06l2.47-2.47v6.69a.75.75 0 001.5 0V3.56l2.47 2.47a.75.75 0 001.06-1.06L8.53 1.22zM14.25 12H1.75a.75.75 0 000 1.5h12.5a.75.75 0 000-1.5z"/></svg>',
+            sync: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M1.5 8a6.5 6.5 0 0110.34-5.26l.7-.72A7.5 7.5 0 1014.24 9.5h-1.03A6.5 6.5 0 011.5 8zm10.74 3.76l-.7.71A7.5 7.5 0 101.76 6.5h1.03a6.5 6.5 0 119.45 5.26z"/></svg>',
+            rebase: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M2.5 14v-2.25h11V14h-11zm5.5-3.5L4.72 7.22l.71-.72 2.52 2.53v-6.3h1.1v6.3l2.53-2.53.71.72-3.79 3.28z"/></svg>',
+            cherryPick: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1L10.3 5.6L15.4 6.3L11.7 9.9L12.6 15L8 12.6L3.4 15L4.3 9.9L0.6 6.3L5.7 5.6L8 1z"/></svg>',
+            stash: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M1 3.5A1.5 1.5 0 012.5 2h11A1.5 1.5 0 0115 3.5v2A1.5 1.5 0 0113.5 7h-.09A4.75 4.75 0 019 11.25V14.5a1.5 1.5 0 01-1.5 1.5h-3A1.5 1.5 0 013 14.5v-3.25A4.75 4.75 0 013.59 7H2.5A1.5 1.5 0 011 5.5v-2zm1.5-.5a.5.5 0 00-.5.5v2a.5.5 0 00.5.5h11a.5.5 0 00.5-.5v-2a.5.5 0 00-.5-.5h-11zm2.09 5A3.75 3.75 0 004 11.25V14.5a.5.5 0 00.5.5h3a.5.5 0 00.5-.5v-3.25c0-1.42.8-2.65 1.91-3.25h-5.41z"/></svg>',
+            tag: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M1.5 1h4.25a1.5 1.5 0 011.06.44l7.75 7.75a1.5 1.5 0 010 2.12l-4.25 4.25a1.5 1.5 0 01-2.12 0L1.44 7.81A1.5 1.5 0 011 6.75V1.5A1.5 1.5 0 012.5 0zm1.06 1.44A.5.5 0 002 2.5v4.25a.5.5 0 00.15.35l7.75 7.75a.5.5 0 00.7 0l4.25-4.25a.5.5 0 000-.7l-7.75-7.75A.5.5 0 006.75 2h-4.25zm.94.56a1 1 0 11-2 0 1 1 0 012 0z"/></svg>',
+            rename: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M12.5 1h1.5v1.5L11.5 5H10v1.5L7.5 9H6v1.5L3.5 13H1v-2.5L3.5 8H5v-1.5L7.5 4H9V2.5L12.5 1z"/></svg>',
+            branchFromCommit: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M8 12a4 4 0 100-8 4 4 0 000 8zm0-1a3 3 0 100-6 3 3 0 000 6zM8 4V0h1v4H8zm0 12v-4h1v4H8z"/></svg>',
+            cleanMerged: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M4.5 1.75a.75.75 0 01.75-.75h8a.75.75 0 01.75.75V3h1a.75.75 0 010 1.5h-1v2.75a.75.75 0 01.75.75v1a.75.75 0 010 1.5h-.75v1a.75.75 0 01-.22.53l-3 3a.75.75 0 01-.53.22h-5a.75.75 0 01-.75-.75V11H3a.75.75 0 010-1.5h1.25V7.75a.75.75 0 01-.75-.75v-1a.75.75 0 010-1.5H4V3H3.25A.75.75 0 012.5 3V1.75zM5.5 3h7V2h-7v1zM6.5 14H10v-3H6.5v3z"/></svg>',
+            lock: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M4 6V4a4 4 0 1 1 8 0v2h1a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h1zm2-2v2h4V4a2 2 0 1 0-4 0z"/></svg>',
+            remotePushCurrent: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M12.75 10a.75.75 0 01.75.75v3.5a.75.75 0 01-.75.75h-9.5A.75.75 0 012.5 14.25v-3.5a.75.75 0 011.5 0v2.75h8v-2.75a.75.75 0 01.75-.75zM7.47 1.22a.75.75 0 011.06 0l3.75 3.75a.75.75 0 01-1.06 1.06L8.75 3.56v6.69a.75.75 0 01-1.5 0V3.56L4.78 5.97a.75.75 0 01-1.06-1.06l3.75-3.75z"/></svg>',
+            remotePullSpecific: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M12.75 10a.75.75 0 01.75.75v3.5a.75.75 0 01-.75.75h-9.5A.75.75 0 012.5 14.25v-3.5a.75.75 0 011.5 0v2.75h8v-2.75a.75.75 0 01.75-.75zM8.53 10.78a.75.75 0 01-1.06 0L3.72 7.03a.75.75 0 011.06-1.06L7.25 8.44V1.75a.75.75 0 011.5 0v6.69l2.47-2.47a.75.75 0 011.06 1.06l-3.75 3.75z"/></svg>',
+            remoteBrowseBranches: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 3h2v10h-2V3zM9 13H7V3h2v10zM4.5 13H2.5V3h2v10z"/></svg>',
+            remoteAdd: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M7.75 2a.75.75 0 01.75.75v4.5h4.5a.75.75 0 010 1.5h-4.5v4.5a.75.75 0 01-1.5 0v-4.5h-4.5a.75.75 0 010-1.5h4.5v-4.5A.75.75 0 017.75 2z"/></svg>',
+            remoteRename: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M12.5 1h1.5v1.5L11.5 5H10v1.5L7.5 9H6v1.5L3.5 13H1v-2.5L3.5 8H5v-1.5L7.5 4H9V2.5L12.5 1z"/></svg>',
+            remoteRemove: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M10 2V1H6v1H3v1h10V2h-3zM4.5 4h7v9.5a1.5 1.5 0 01-1.5 1.5h-4a1.5 1.5 0 01-1.5-1.5V4zm1 1v7.5h1V5h-1zm3 0v7.5h1V5h-1z"/></svg>',
+            remotePrune: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M9.5 2V1H6.5v1H3v1h10V2H9.5zM4.5 4h7v9.5c0 .83-.67 1.5-1.5 1.5h-4c-.83 0-1.5-.67-1.5-1.5V4zM5.5 12h1V5h-1v7zm3.5-7h-1v7h1V5z"/></svg>',
+            remoteChangeUpstream: '<svg class="codicon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M1.5 8a6.5 6.5 0 0110.34-5.26l.7-.72A7.5 7.5 0 1014.24 9.5h-1.03A6.5 6.5 0 011.5 8zm10.74 3.76l-.7.71A7.5 7.5 0 101.76 6.5h1.03a6.5 6.5 0 119.45 5.26z"/></svg>'
+          };
+
+          let popovers = [];
+          let lastPayload = null;
+
+          function closeAllPopovers() {
+            popovers.forEach(p => { p.element.remove(); });
+            popovers = [];
+            document.querySelectorAll('.branch-badge').forEach(b => {
+              b.classList.remove('active-badge');
+            });
+          }
+
+          function updateActiveParentHighlights() {
+            document.querySelectorAll('.popover-item').forEach(el => {
+              el.classList.remove('active-parent');
+            });
+            for (let i = 1; i < popovers.length; i++) {
+              if (popovers[i].triggerItem) {
+                popovers[i].triggerItem.classList.add('active-parent');
+              }
+            }
+          }
+
+          function createPopoverMenu(payload, menuType) {
+            const el = document.createElement('div');
+            el.className = 'popover';
+            el.dataset.menuType = menuType;
+            if (menuType !== 'main') {
+              el.classList.add('submenu');
+            }
+            
+            let html = '';
+            const repoName = payload.repoName;
+            
+            if (!payload.isCloned) {
+              html += '<div class="popover-item disabled"><span class="popover-item-label">Repository is not cloned.</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'clone\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.remoteAdd + 'Clone Repository</span></div>';
+              el.innerHTML = html;
+              return el;
+            }
+            
+            if (menuType === 'main') {
+              if (payload.branches && payload.branches.length > 1) {
+                html += '<div class="popover-item" onclick="postAction(\\'switch\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.switchBranch + 'Switch Branch</span></div>';
+              }
+              html += '<div class="popover-item" onclick="postAction(\\'create\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.createBranch + 'Create Branch</span></div>';
+              html += '<div class="popover-divider"></div>';
+              if (payload.branches && payload.branches.length > 1) {
+                html += '<div class="popover-item" onclick="openSubmenu(event, \\'branches\\')"><span class="popover-item-label">' + icons.switchBranch + 'Branches</span>' + icons.chevronRight + '</div>';
+              }
+              html += '<div class="popover-item" onclick="openSubmenu(event, \\'remote\\')"><span class="popover-item-label">' + icons.sync + 'Remote</span>' + icons.chevronRight + '</div>';
+            }
+            else if (menuType === 'branches') {
+              html += '<div class="popover-item" onclick="postAction(\\'merge\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.mergeBranch + 'Merge Branch</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'delete\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.deleteBranch + 'Delete Branch</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'compare\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.compareBranches + 'Compare Branches</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'history\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.history + 'Branch History</span></div>';
+              html += '<div class="popover-divider"></div>';
+              html += '<div class="popover-item" onclick="openSubmenu(event, \\'advanced_branches\\')"><span class="popover-item-label">' + icons.sync + 'Advanced</span>' + icons.chevronRight + '</div>';
+            }
+            else if (menuType === 'advanced_branches') {
+              html += '<div class="popover-item" onclick="postAction(\\'rebase\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.rebase + 'Rebase</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'cherryPick\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.cherryPick + 'Cherry Pick</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'stash\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.stash + 'Stash</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'tags\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.tag + 'Tags</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'renameBranch\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.rename + 'Rename Branch</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'branchFromCommit\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.branchFromCommit + 'Create Branch From Commit</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'cleanMerged\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.cleanMerged + 'Clean Merged Branches</span></div>';
+              html += '<div class="popover-item disabled"><span class="popover-item-label">' + icons.lock + 'Protect Branch (Coming Soon)</span></div>';
+            }
+            else if (menuType === 'remote') {
+              html += '<div class="popover-item" onclick="postAction(\\'fetch\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.fetch + 'Fetch</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'pull\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.pull + 'Pull</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'push\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.push + 'Push</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'sync\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.sync + 'Sync Repository</span></div>';
+              html += '<div class="popover-divider"></div>';
+              html += '<div class="popover-item" onclick="openSubmenu(event, \\'advanced_remote\\')"><span class="popover-item-label">' + icons.sync + 'Advanced</span>' + icons.chevronRight + '</div>';
+            }
+            else if (menuType === 'advanced_remote') {
+              html += '<div class="popover-item" onclick="postAction(\\'remotePushCurrent\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.remotePushCurrent + 'Push Current Branch</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'remotePullSpecific\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.remotePullSpecific + 'Pull Specific Branch</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'remoteBrowseBranches\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.remoteBrowseBranches + 'Browse Remote Branches</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'remoteAdd\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.remoteAdd + 'Add Remote</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'remoteRename\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.remoteRename + 'Rename Remote</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'remoteRemove\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.remoteRemove + 'Remove Remote</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'remotePrune\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.remotePrune + 'Prune Remote</span></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'remoteChangeUpstream\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.remoteChangeUpstream + 'Change Upstream Branch</span></div>';
+            }
+            
+            el.innerHTML = html;
+            return el;
+          }
+
+          function openPopover(payload) {
+            closeAllPopovers();
+            lastPayload = payload;
+            
+            const badge = document.getElementById('badge-' + payload.repoName);
+            if (!badge) return;
+            
+            badge.classList.add('active-badge');
+            
+            const mainPop = createPopoverMenu(payload, 'main');
+            document.body.appendChild(mainPop);
+            
+            const rect = badge.getBoundingClientRect();
+            const popHeight = mainPop.offsetHeight || 120;
+            const popWidth = mainPop.offsetWidth || 175;
+            
+            let top = rect.bottom + 4;
+            if (top + popHeight > window.innerHeight) {
+              top = rect.top - popHeight - 4;
+            }
+            let left = rect.left;
+            if (left + popWidth > window.innerWidth) {
+              left = window.innerWidth - popWidth - 8;
+            }
+            if (left < 8) left = 8;
+            
+            mainPop.style.top = top + 'px';
+            mainPop.style.left = left + 'px';
+            
+            requestAnimationFrame(() => {
+              mainPop.classList.add('visible');
+            });
+            
+            const items = Array.from(mainPop.querySelectorAll('.popover-item:not(.disabled)'));
+            popovers.push({ id: 'main', element: mainPop, activeIndex: -1, items: items });
+          }
+
+          function openSubmenu(event, submenuType) {
+            event.stopPropagation();
+            const itemEl = event.currentTarget;
+            const parentPopoverEl = itemEl.closest('.popover');
+            
+            const parentIdx = popovers.findIndex(p => p.element === parentPopoverEl);
+            if (parentIdx === -1) return;
+            
+            for (let i = popovers.length - 1; i > parentIdx; i--) {
+              popovers[i].element.remove();
+              popovers.pop();
+            }
+            
+            const subPop = createPopoverMenu(lastPayload, submenuType);
+            document.body.appendChild(subPop);
+            
+            const itemRect = itemEl.getBoundingClientRect();
+            const popWidth = subPop.offsetWidth || 175;
+            const popHeight = subPop.offsetHeight || 200;
+            
+            let subLeft = itemRect.right + 2;
+            let isSlideLeft = false;
+            if (subLeft + popWidth > window.innerWidth) {
+              subLeft = itemRect.left - popWidth - 2;
+              isSlideLeft = true;
+            }
+            if (subLeft < 8) subLeft = 8;
+            
+            if (isSlideLeft) {
+              subPop.classList.add('slide-left');
+            }
+            
+            let subTop = itemRect.top;
+            if (subTop + popHeight > window.innerHeight) {
+              subTop = window.innerHeight - popHeight - 8;
+            }
+            if (subTop < 8) subTop = 8;
+            
+            subPop.style.left = subLeft + 'px';
+            subPop.style.top = subTop + 'px';
+            
+            requestAnimationFrame(() => {
+              subPop.classList.add('visible');
+            });
+            
+            const items = Array.from(subPop.querySelectorAll('.popover-item:not(.disabled)'));
+            popovers.push({ id: submenuType, element: subPop, activeIndex: -1, items: items, triggerItem: itemEl });
+            updateActiveParentHighlights();
+          }
+
+          function postAction(action, repoName) {
+            const currentBranch = lastPayload ? lastPayload.currentBranch : 'main';
+            post('popoverAction', { action, repoName, currentBranch, isCloned: lastPayload.isCloned, cloneUrl: lastPayload.cloneUrl });
+            closeAllPopovers();
+          }
+
+          function openRepoOptionsPopover(payload) {
+            closeAllPopovers();
+            lastPayload = payload;
+            
+            const pop = document.createElement('div');
+            pop.className = 'popover';
+            pop.dataset.menuType = 'options_main';
+            
+            let html = '';
+            html += '<div class="popover-item disabled"><span class="popover-item-label">Repository Options</span></div>';
+            html += '<div class="popover-divider"></div>';
+            
+            const pinChecked = payload.pinActive ? ' <span style="font-weight:bold; margin-left:auto;">✓</span>' : '';
+            html += '<div class="popover-item" onclick="postOptionsAction(\\'togglePin\\')"><span class="popover-item-label">Pin Active Repository at Top</span>' + pinChecked + '</div>';
+            html += '<div class="popover-divider"></div>';
+            
+            html += '<div class="popover-item" onclick="openOptionsSubmenu(event, \\'options_sort\\')"><span class="popover-item-label">Sort By</span>' + icons.chevronRight + '</div>';
+            html += '<div class="popover-divider"></div>';
+            
+            const recentlyOpenedChecked = payload.sortOption === 'recentlyOpened' ? ' <span style="font-weight:bold; margin-left:auto;">✓</span>' : '';
+            html += '<div class="popover-item" onclick="postOptionsAction(\\'setSort\\', \\'recentlyOpened\\')"><span class="popover-item-label">Recently Opened</span>' + recentlyOpenedChecked + '</div>';
+            
+            html += '<div class="popover-item" onclick="openOptionsSubmenu(event, \\'options_visibility\\')"><span class="popover-item-label">Visibility</span>' + icons.chevronRight + '</div>';
+            
+            html += '<div class="popover-item" onclick="openOptionsSubmenu(event, \\'options_language\\')"><span class="popover-item-label">Language</span>' + icons.chevronRight + '</div>';
+            
+            const starsChecked = payload.sortOption === 'stars' ? ' <span style="font-weight:bold; margin-left:auto;">✓</span>' : '';
+            html += '<div class="popover-item" onclick="postOptionsAction(\\'setSort\\', \\'stars\\')"><span class="popover-item-label">Stars</span>' + starsChecked + '</div>';
+            
+            pop.innerHTML = html;
+            document.body.appendChild(pop);
+            
+            pop.style.top = '4px';
+            pop.style.right = '12px';
+            pop.style.left = 'auto';
+            pop.style.transformOrigin = 'top right';
+            
+            requestAnimationFrame(() => {
+              pop.classList.add('visible');
+            });
+            
+            const items = Array.from(pop.querySelectorAll('.popover-item:not(.disabled)'));
+            popovers.push({ id: 'options_main', element: pop, activeIndex: -1, items: items });
+          }
+
+          function createOptionsSubmenu(submenuType) {
+            const el = document.createElement('div');
+            el.className = 'popover submenu';
+            el.dataset.menuType = submenuType;
+            
+            let html = '';
+            
+            if (submenuType === 'options_sort') {
+              const nameCheck = lastPayload.sortOption === 'name' ? ' <span style="font-weight:bold; margin-left:auto;">✓</span>' : '';
+              const commitCheck = lastPayload.sortOption === 'lastCommit' ? ' <span style="font-weight:bold; margin-left:auto;">✓</span>' : '';
+              html += '<div class="popover-item" onclick="postOptionsAction(\\'setSort\\', \\'name\\')"><span class="popover-item-label">Name</span>' + nameCheck + '</div>';
+              html += '<div class="popover-item" onclick="postOptionsAction(\\'setSort\\', \\'lastCommit\\')"><span class="popover-item-label">Last Commit</span>' + commitCheck + '</div>';
+            }
+            else if (submenuType === 'options_visibility') {
+              const publicCheck = lastPayload.visibilityFilter === 'public' ? ' <span style="font-weight:bold; margin-left:auto;">✓</span>' : '';
+              const privateCheck = lastPayload.visibilityFilter === 'private' ? ' <span style="font-weight:bold; margin-left:auto;">✓</span>' : '';
+              const allCheck = lastPayload.visibilityFilter === 'all' ? ' <span style="font-weight:bold; margin-left:auto;">✓</span>' : '';
+              html += '<div class="popover-item" onclick="postOptionsAction(\\'setVisibility\\', \\'public\\')"><span class="popover-item-label">Public</span>' + publicCheck + '</div>';
+              html += '<div class="popover-item" onclick="postOptionsAction(\\'setVisibility\\', \\'private\\')"><span class="popover-item-label">Private</span>' + privateCheck + '</div>';
+              html += '<div class="popover-item" onclick="postOptionsAction(\\'setVisibility\\', \\'all\\')"><span class="popover-item-label">All</span>' + allCheck + '</div>';
+            }
+            else if (submenuType === 'options_language') {
+              const allCheck = lastPayload.languageFilter === 'all' ? ' <span style="font-weight:bold; margin-left:auto;">✓</span>' : '';
+              html += '<div class="popover-item" onclick="postOptionsAction(\\'setLanguage\\', \\'all\\')"><span class="popover-item-label">All</span>' + allCheck + '</div>';
+              
+              if (lastPayload.languages) {
+                lastPayload.languages.forEach(lang => {
+                  const check = lastPayload.languageFilter === lang ? ' <span style="font-weight:bold; margin-left:auto;">✓</span>' : '';
+                  html += '<div class="popover-item" onclick="postOptionsAction(\\'setLanguage\\', \\'' + lang + '\\')"><span class="popover-item-label">' + lang + '</span>' + check + '</div>';
+                });
+              }
+              
+              const naCheck = lastPayload.languageFilter === 'N/A' ? ' <span style="font-weight:bold; margin-left:auto;">✓</span>' : '';
+              html += '<div class="popover-item" onclick="postOptionsAction(\\'setLanguage\\', \\'N/A\\')"><span class="popover-item-label">N/A</span>' + naCheck + '</div>';
+              
+              const otherCheck = lastPayload.languageFilter === 'Other' ? ' <span style="font-weight:bold; margin-left:auto;">✓</span>' : '';
+              html += '<div class="popover-item" onclick="postOptionsAction(\\'setLanguage\\', \\'Other\\')"><span class="popover-item-label">Other</span>' + otherCheck + '</div>';
+            }
+            
+            el.innerHTML = html;
+            return el;
+          }
+
+          function openOptionsSubmenu(event, submenuType) {
+            event.stopPropagation();
+            const itemEl = event.currentTarget;
+            const parentPopoverEl = itemEl.closest('.popover');
+            
+            const parentIdx = popovers.findIndex(p => p.element === parentPopoverEl);
+            if (parentIdx === -1) return;
+            
+            for (let i = popovers.length - 1; i > parentIdx; i--) {
+              popovers[i].element.remove();
+              popovers.pop();
+            }
+            
+            const subPop = createOptionsSubmenu(submenuType);
+            document.body.appendChild(subPop);
+            
+            const itemRect = itemEl.getBoundingClientRect();
+            const popWidth = subPop.offsetWidth || 175;
+            const popHeight = subPop.offsetHeight || 200;
+            
+            let subLeft = itemRect.right + 2;
+            let isSlideLeft = false;
+            if (subLeft + popWidth > window.innerWidth) {
+              subLeft = itemRect.left - popWidth - 2;
+              isSlideLeft = true;
+            }
+            if (subLeft < 8) subLeft = 8;
+            
+            if (isSlideLeft) {
+              subPop.classList.add('slide-left');
+            }
+            
+            let subTop = itemRect.top;
+            if (subTop + popHeight > window.innerHeight) {
+              subTop = window.innerHeight - popHeight - 8;
+            }
+            if (subTop < 8) subTop = 8;
+            
+            subPop.style.left = subLeft + 'px';
+            subPop.style.top = subTop + 'px';
+            
+            requestAnimationFrame(() => {
+              subPop.classList.add('visible');
+            });
+            
+            const items = Array.from(subPop.querySelectorAll('.popover-item:not(.disabled)'));
+            popovers.push({ id: submenuType, element: subPop, activeIndex: -1, items: items, triggerItem: itemEl });
+            updateActiveParentHighlights();
+          }
+
+          function postOptionsAction(action, value) {
+            post('repoOptionsAction', { action, value });
+            closeAllPopovers();
+          }
+
+          // Outside Click using Capture phase to immediately dismiss on any click outside
+          document.addEventListener('click', (e) => {
+            if (e.target.closest('.branch-badge') || e.target.closest('.popover')) {
+              return;
+            }
+            closeAllPopovers();
+          }, true);
+          
+          // Close immediately on scroll of viewport/containers
+          window.addEventListener('scroll', () => {
+            closeAllPopovers();
+          }, true);
+
+          // Keyboard Navigation
+          document.addEventListener('keydown', (e) => {
+            if (popovers.length === 0) {
+              return;
+            }
+
+            const current = popovers[popovers.length - 1];
+            const items = current.items;
+
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              if (popovers.length > 1) {
+                const popped = popovers.pop();
+                popped.element.remove();
+                updateActiveParentHighlights();
+              } else {
+                closeAllPopovers();
+              }
+            }
+            else if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              if (items.length === 0) return;
+              if (current.activeIndex >= 0 && current.activeIndex < items.length) {
+                items[current.activeIndex].classList.remove('focused');
+              }
+              current.activeIndex = (current.activeIndex + 1) % items.length;
+              items[current.activeIndex].classList.add('focused');
+            }
+            else if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              if (items.length === 0) return;
+              if (current.activeIndex >= 0 && current.activeIndex < items.length) {
+                items[current.activeIndex].classList.remove('focused');
+              }
+              current.activeIndex = (current.activeIndex - 1 + items.length) % items.length;
+              items[current.activeIndex].classList.add('focused');
+            }
+            else if (e.key === 'ArrowRight') {
+              e.preventDefault();
+              if (current.activeIndex >= 0 && current.activeIndex < items.length) {
+                const item = items[current.activeIndex];
+                if (item.getAttribute('onclick') && item.getAttribute('onclick').includes('openSubmenu')) {
+                  item.click();
+                  setTimeout(() => {
+                    if (popovers.length > 0) {
+                      const nextMenu = popovers[popovers.length - 1];
+                      if (nextMenu.items.length > 0) {
+                        nextMenu.activeIndex = 0;
+                        nextMenu.items[0].classList.add('focused');
+                      }
+                    }
+                  }, 50);
+                }
+              }
+            }
+            else if (e.key === 'ArrowLeft') {
+              e.preventDefault();
+              if (popovers.length > 1) {
+                const popped = popovers.pop();
+                popped.element.remove();
+                updateActiveParentHighlights();
+              }
+            }
+            else if (e.key === 'Enter') {
+              e.preventDefault();
+              if (current.activeIndex >= 0 && current.activeIndex < items.length) {
+                items[current.activeIndex].click();
+              }
+            }
+          });
 
           function editDescription(repoName, owner, element) {
             const currentDesc = element.innerText;
@@ -257,9 +840,31 @@ class RepositoriesWebviewProvider {
             input.onblur = cancel;
           }
 
-          window.addEventListener('message', event => {
+           window.addEventListener('message', event => {
             const message = event.data;
-            if (message.command === 'descriptionUpdated') {
+            if (message.command === 'openPopover') {
+              openPopover(message.payload);
+              window.focus();
+            } else if (message.command === 'openRepoOptionsPopover') {
+              openRepoOptionsPopover(message.payload);
+              window.focus();
+            } else if (message.command === 'closePopovers') {
+              closeAllPopovers();
+            } else if (message.command === 'reposUpdated') {
+              const grid = document.querySelector('.repo-grid');
+              if (grid) {
+                grid.innerHTML = message.payload.html;
+              } else {
+                const shell = document.querySelector('.shell');
+                if (shell) {
+                  const oldGrid = shell.querySelector('.repo-grid');
+                  if (oldGrid) oldGrid.remove();
+                  const oldMuted = shell.querySelector('.muted');
+                  if (oldMuted) oldMuted.remove();
+                  shell.insertAdjacentHTML('beforeend', message.payload.html);
+                }
+              }
+            } else if (message.command === 'descriptionUpdated') {
               const element = document.getElementById('desc-' + message.payload.repoName);
               if (element) {
                 if (message.payload.success) {
@@ -305,17 +910,23 @@ class RepositoriesWebviewProvider {
             }
           });
 
-          // Client-side filtering for repo cards
           document.addEventListener('DOMContentLoaded', () => {
             const input = document.getElementById('repoSearch');
             if (!input) return;
             input.addEventListener('input', () => {
               const q = (input.value || '').toLowerCase().trim();
+              let hasMatch = false;
               document.querySelectorAll('.repo-card').forEach(c => {
                 const name = (c.querySelector('.repo-name') && c.querySelector('.repo-name').innerText.toLowerCase()) || '';
                 const desc = (c.querySelector('.muted') && c.querySelector('.muted').innerText.toLowerCase()) || '';
-                c.style.display = (!q || name.includes(q) || desc.includes(q)) ? '' : 'none';
+                const match = (!q || name.includes(q) || desc.includes(q));
+                c.style.display = match ? '' : 'none';
+                if (match) hasMatch = true;
               });
+              const searchEmpty = document.getElementById('searchEmpty');
+              if (searchEmpty) {
+                searchEmpty.style.display = (!hasMatch && q) ? 'block' : 'none';
+              }
             });
           });
         </script>
@@ -346,7 +957,7 @@ class RepositoriesWebviewProvider {
     };
 
     const lockSvg = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="margin-right:2px"><path d="M4 6V4a4 4 0 1 1 8 0v2h1a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h1zm2-2v2h4V4a2 2 0 1 0-4 0z"/></svg>`;
-    const globeSvg = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="margin-right:2px; color: var(--vscode-icon-foreground);"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm.5 1.03A7.03 7.03 0 0 1 14.97 8H8.5V1.03zM7.5 1.03V8H1.03A7.03 7.03 0 0 1 7.5 1.03zM1.03 9H7.5v6.97A7.03 7.03 0 0 1 1.03 9zM8.5 14.97V9h6.47a7.03 7.03 0 0 1-6.47 5.97z"/></svg>`;
+    const globeSvg = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="margin-right:2px; vertical-align: middle;"><path fill-rule="evenodd" clip-rule="evenodd" d="M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14zm0 1c4.418 0 8-3.582 8-8s-3.582-8-8-8-8 3.582-8 8 3.582 8 8 8zm0-14a6 6 0 0 1 3.53 1.156c-.22.441-.497.8-.823 1.047-.367.279-.81.428-1.282.445a1.86 1.86 0 0 1-1.396-.549l-.096-.1a.75.75 0 0 0-1.127.05L5.787 5.25a.75.75 0 0 0-.022 1.026l1.246 1.353-.162.324A1.332 1.332 0 0 1 5.655 8.71H4.25c-.247 0-.482-.09-.663-.25l-.89-.79a5.98 5.98 0 0 1 .496-4.577C3.996 2.378 5.862 2 8 2zM3.486 9.475a5.972 5.972 0 0 1-.365-2.22l.487.433c.362.32.83.502 1.318.513l.89-.96-.467-.507a2.25 2.25 0 0 1 .067-3.078l1.037-.951A6.02 6.02 0 0 1 8 3.018c.28.326.657.518 1.059.543.645.04 1.258-.231 1.7-.732a5.992 5.992 0 0 1 2.128 4.296h-1.579a.75.75 0 0 0-.663.398l-.403.805a.75.75 0 0 0 .285.993l1.378.827A5.975 5.975 0 0 1 8 13.98c-1.354 0-2.585-.45-3.568-1.206L5.38 12.3c.34-.145.603-.42.727-.76a1.996 1.996 0 0 0-1.134-2.459L3.486 9.475zm9.467.575a6.002 6.002 0 0 0 1.93-3.05H12.89a2.25 2.25 0 0 1-1.99-1.194l-.403-.805A2.25 2.25 0 0 1 11.35 1.5c.01-.17.013-.34.009-.508A5.995 5.995 0 0 1 14.887 5H12.92c-.398 0-.78-.158-1.06-.44L10.3 3a.75.75 0 0 0-1.06 0L8.204 4.037a.75.75 0 0 0 .217 1.242l.623.25c.348.14.568.49.544.866-.023.359-.22.682-.533.86a2.247 2.247 0 0 1-1.92.203l-.402-.16a.75.75 0 0 0-.895.234l-.8 1.067a.75.75 0 0 0-.115.654l.32 1.282a6.006 6.006 0 0 0 3.731 3.513c-.046-.388-.002-.782.13-1.146l.45-1.238c.182-.5.59-.88 1.1-.986l1.385-.29z"/></svg>`;
     const starSvg = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="margin-right:2px"><path d="M8 1L10.3 5.6L15.4 6.3L11.7 9.9L12.6 15L8 12.6L3.4 15L4.3 9.9L0.6 6.3L5.7 5.6L8 1z"/></svg>`;
     const folderSvg = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 4h-4.5L8 2H2C.9 2 0 2.9 0 4v8c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 8H2V4h5.5l1.5 2H14v6z"/></svg>`;
     const cloudSvg = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11 5c-.3 0-.6.1-.9.1A4.5 4.5 0 0 0 2 6.5C.9 6.8 0 8 0 9.5 0 11.4 1.6 13 3.5 13h7.5c2.2 0 4-1.8 4-4s-1.8-4-4-4z"/></svg>`;
@@ -365,7 +976,7 @@ class RepositoriesWebviewProvider {
 
     const branchName = repo.current_branch || 'main';
     const branchSvg = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="margin-right:2px"><path fill-rule="evenodd" d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6A2.5 2.5 0 0110 8.5H6a1 1 0 00-1 1v1.378a2.251 2.251 0 11-1.5 0V4.242a2.251 2.251 0 111.5 0v3.758h4a1 1 0 001-1V5.372a2.25 2.25 0 01-1.5-2.122zM3.5 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zM4.25 12a.75.75 0 10-1.5 0 .75.75 0 001.5 0z"/></svg>`;
-    const branchHtml = `<span class="pill branch-badge" onclick="post('manageBranch', { repoName: '${repoName}', owner: '${owner.replace(/'/g, "\\\\'")}', isCloned: ${repo.is_cloned}, cloneUrl: '${cloneUrl}', currentBranch: '${branchName}' })" title="Manage Branches">${branchSvg}${branchName}</span>`;
+    const branchHtml = `<span id="badge-${repoName}" class="pill branch-badge" onclick="post('manageBranch', { repoName: '${repoName}', owner: '${owner.replace(/'/g, "\\\\'")}', isCloned: ${repo.is_cloned}, cloneUrl: '${cloneUrl}', currentBranch: '${branchName}' })" title="Manage Branches">${branchSvg}${branchName}</span>`;
     
     const stars = repo.stargazers_count ? `<span class="pill">${starSvg} ${repo.stargazers_count}</span>` : '';
     const isActive = repo.name && repo.name === this.state.workspace;
@@ -666,6 +1277,15 @@ async function refreshReposCommand() {
   isRefreshing = false;
 }
 
+async function recordOpenedRepo(repoName) {
+  const key = 'recently-opened-repos';
+  let list = extensionContext.workspaceState.get(key) || [];
+  list = list.filter(name => name !== repoName);
+  list.unshift(repoName);
+  if (list.length > 50) list = list.slice(0, 50);
+  await extensionContext.workspaceState.update(key, list);
+}
+
 async function openRepoCommand(repoName, cloneUrl) {
   try {
     if (!repoName) {
@@ -678,6 +1298,7 @@ async function openRepoCommand(repoName, cloneUrl) {
     });
 
     if (result && result.success && result.exists && result.path) {
+      await recordOpenedRepo(repoName);
       const uri = vscode.Uri.file(result.path);
       await vscode.commands.executeCommand('vscode.openFolder', uri, false);
       return;
@@ -720,6 +1341,7 @@ async function openRepoCommand(repoName, cloneUrl) {
       return;
     }
 
+    await recordOpenedRepo(repoName);
     const uri = vscode.Uri.file(cloneResult.path || destinationPath);
     await vscode.commands.executeCommand('vscode.openFolder', uri, false);
   } catch (error) {
@@ -743,7 +1365,7 @@ async function createRepoCommand() {
       const inputBox = vscode.window.createInputBox();
       inputBox.title = 'Create Repository';
       inputBox.prompt = 'Auto-Generate Repository Description';
-      inputBox.placeHolder = 'Type a description or click the $(wand) button above to generate one.';
+      inputBox.placeholder = 'Click the 🪄 icon on the top right to generate a description, or type one manually...';
       inputBox.ignoreFocusOut = true;
       inputBox.buttons = [
         {
@@ -777,7 +1399,7 @@ async function createRepoCommand() {
 
           if (generated && generated.success) {
             inputBox.value = generated.description || '';
-            inputBox.placeholder = 'Enter description or click 🪄 to auto-generate';
+            inputBox.placeholder = 'Click the 🪄 icon on the top right to generate a description, or type one manually...';
             inputBox.enabled = true;
             inputBox.busy = false;
             inputBox.validationMessage = '';
@@ -785,7 +1407,7 @@ async function createRepoCommand() {
             const errorMessage = generated && generated.error ? generated.error : 'Generation failed';
             inputBox.enabled = true;
             inputBox.busy = false;
-            inputBox.placeholder = 'Enter description or click 🪄 to auto-generate';
+            inputBox.placeholder = 'Click the 🪄 icon on the top right to generate a description, or type one manually...';
             inputBox.value = '';
             inputBox.validationMessage = errorMessage;
           }
@@ -1032,97 +1654,164 @@ async function initializeRepoCommand() {
   }
 }
 
+async function updateBranchHistory(repoName, branchName) {
+  if (!extensionContext || !repoName || !branchName) {
+    return;
+  }
+  const key = `branch-history-${repoName}`;
+  let history = extensionContext.workspaceState.get(key) || [];
+  history = history.filter(b => b !== branchName);
+  history.unshift(branchName);
+  if (history.length > 5) {
+    history = history.slice(0, 5);
+  }
+  await extensionContext.workspaceState.update(key, history);
+}
+
 async function manageBranchCommand(payload) {
   if (!payload || !payload.repoName) {
     return;
   }
 
-  // 1. If not cloned, show friendly message with option to clone
   if (!payload.isCloned) {
-    const selection = await vscode.window.showInformationMessage(
-      "Branch management is only available for locally cloned repositories.",
-      "Clone Repository"
-    );
-    if (selection === "Clone Repository") {
-      await openRepoCommand(payload.repoName, payload.cloneUrl);
-    }
+    reposViewProvider.view.webview.postMessage({
+      command: 'openPopover',
+      payload: {
+        repoName: payload.repoName,
+        isCloned: false,
+        cloneUrl: payload.cloneUrl
+      }
+    });
     return;
   }
 
-  const currentBranch = payload.currentBranch || 'main';
-
-  // 2. Check for detached HEAD state
-  if (currentBranch === 'HEAD') {
-    vscode.window.showErrorMessage("Branch management is not available in a detached HEAD state.");
-    return;
-  }
-
-  // 3. Fetch the repository path
   const pathResult = await runBackendScript('managers/repo_manager.py', {
     action: 'check_repo_exists',
     repo_name: payload.repoName
   });
 
   if (!pathResult || !pathResult.success || !pathResult.exists || !pathResult.path) {
-    const selection = await vscode.window.showInformationMessage(
-      "Branch management is only available for locally cloned repositories.",
-      "Clone Repository"
-    );
-    if (selection === "Clone Repository") {
-      await openRepoCommand(payload.repoName, payload.cloneUrl);
-    }
+    reposViewProvider.view.webview.postMessage({
+      command: 'openPopover',
+      payload: {
+        repoName: payload.repoName,
+        isCloned: false,
+        cloneUrl: payload.cloneUrl
+      }
+    });
     return;
   }
 
   const repoPath = pathResult.path;
 
-  // 4. Retrieve branches from backend
   const branchesResult = await runBackendScript('managers/local_repo.py', {
     action: 'list_branches',
     repo_path: repoPath
   });
 
-  if (!branchesResult || !branchesResult.success) {
-    vscode.window.showErrorMessage(branchesResult.message || 'Failed to list branches');
+  const branches = (branchesResult && branchesResult.success) ? branchesResult.branches : [];
+
+  const remotesResult = await runBackendScript('managers/local_repo.py', {
+    action: 'list_remotes',
+    repo_path: repoPath
+  });
+  const remotes = (remotesResult && remotesResult.success) ? remotesResult.remotes : [];
+
+  reposViewProvider.view.webview.postMessage({
+    command: 'openPopover',
+    payload: {
+      repoName: payload.repoName,
+      currentBranch: payload.currentBranch || 'main',
+      isCloned: true,
+      branches,
+      remotes
+    }
+  });
+}
+
+async function repoOptionsCommand() {
+  if (reposViewProvider && reposViewProvider.view) {
+    const uniqueLangs = new Set();
+    reposViewProvider.state.repos.forEach(r => {
+      if (r.language && r.language !== 'N/A') {
+        uniqueLangs.add(r.language);
+      }
+    });
+    const languages = Array.from(uniqueLangs).sort();
+
+    reposViewProvider.view.webview.postMessage({
+      command: 'openRepoOptionsPopover',
+      payload: {
+        pinActive: reposViewProvider.state.pinActive !== false,
+        sortOption: reposViewProvider.state.sortOption || 'name',
+        visibilityFilter: reposViewProvider.state.visibilityFilter || 'all',
+        languageFilter: reposViewProvider.state.languageFilter || 'all',
+        languages
+      }
+    });
+  }
+}
+
+async function handleRepoOptionsAction(payload) {
+  const { action, value } = payload;
+  const state = reposViewProvider.state;
+
+  if (action === 'togglePin') {
+    state.pinActive = state.pinActive === false ? true : false;
+  } else if (action === 'setSort') {
+    state.sortOption = value;
+  } else if (action === 'setVisibility') {
+    state.visibilityFilter = value;
+  } else if (action === 'setLanguage') {
+    state.languageFilter = value;
+  }
+
+  // Update repository grid
+  if (reposViewProvider && reposViewProvider.view) {
+    const displayHtml = reposViewProvider.getReposHtml();
+    reposViewProvider.view.webview.postMessage({
+      command: 'reposUpdated',
+      payload: { html: displayHtml }
+    });
+  }
+}
+
+async function handlePopoverAction(payload) {
+  const { action, repoName, currentBranch, isCloned, cloneUrl } = payload;
+  if (!isCloned && action !== 'clone') {
     return;
   }
 
-  const branches = branchesResult.branches || [];
-
-  // 5. Determine Quick Pick options based on number of local branches
-  const options = [];
-  if (branches.length > 1) {
-    options.push({
-      label: '🔀 Switch Branch',
-      description: 'Checkout an existing local branch'
-    });
-  }
-  options.push({
-    label: '➕ Create Branch',
-    description: 'Create a new branch from the current branch'
-  });
-  if (branches.length > 1) {
-    options.push({
-      label: '🔀 Merge Branch',
-      description: `Merge another local branch into ${currentBranch}`
-    });
-    options.push({
-      label: '🗑 Delete Branch',
-      description: 'Delete an inactive local branch'
-    });
-  }
-
-  const pick = await vscode.window.showQuickPick(options, {
-    title: 'Branch Management',
-    placeHolder: 'Select an option'
-  });
-
-  if (!pick) {
+  if (action === 'clone') {
+    await openRepoCommand(repoName, cloneUrl);
     return;
   }
 
-  if (pick.label === '🔀 Switch Branch') {
-    // Show branches Quick Pick
+  const pathResult = await runBackendScript('managers/repo_manager.py', {
+    action: 'check_repo_exists',
+    repo_name: repoName
+  });
+
+  if (!pathResult || !pathResult.success || !pathResult.exists || !pathResult.path) {
+    vscode.window.showErrorMessage("Repository path not found.");
+    return;
+  }
+
+  const repoPath = pathResult.path;
+
+  const writeActions = ['switch', 'create', 'merge', 'delete', 'pull', 'push', 'sync', 'rebase', 'cherryPick', 'renameBranch', 'branchFromCommit', 'remotePushCurrent'];
+  if (currentBranch === 'HEAD' && writeActions.includes(action)) {
+    vscode.window.showErrorMessage("Branch management is not available in a detached HEAD state.");
+    return;
+  }
+
+  if (action === 'switch') {
+    const branchesResult = await runBackendScript('managers/local_repo.py', {
+      action: 'list_branches',
+      repo_path: repoPath
+    });
+    const branches = (branchesResult && branchesResult.success) ? branchesResult.branches : [];
+
     const branchItems = branches.map(b => {
       const isActive = b === currentBranch;
       return {
@@ -1136,11 +1825,8 @@ async function manageBranchCommand(payload) {
       placeHolder: 'Select branch to switch to'
     });
 
-    if (!selectedBranchItem) {
-      return;
-    }
+    if (!selectedBranchItem) return;
 
-    // Switch branch
     const switchResult = await runBackendScript('managers/local_repo.py', {
       action: 'switch_branch',
       repo_path: repoPath,
@@ -1149,37 +1835,35 @@ async function manageBranchCommand(payload) {
 
     if (switchResult && switchResult.success) {
       vscode.window.showInformationMessage(`Checked out branch: ${selectedBranchItem.branchName}`);
+      await updateBranchHistory(repoName, selectedBranchItem.branchName);
       await refreshReposCommand();
     } else {
       vscode.window.showErrorMessage(switchResult.message || `Failed to checkout branch: ${selectedBranchItem.branchName}`);
     }
+  }
 
-  } else if (pick.label === '➕ Create Branch') {
-    // Open Input Box for new branch name
+  else if (action === 'create') {
+    const branchesResult = await runBackendScript('managers/local_repo.py', {
+      action: 'list_branches',
+      repo_path: repoPath
+    });
+    const branches = (branchesResult && branchesResult.success) ? branchesResult.branches : [];
+
     const newBranchName = await vscode.window.showInputBox({
       placeHolder: 'Enter new branch name...',
       prompt: 'Create a new branch from the current branch.',
       ignoreFocusOut: true,
       validateInput: (value) => {
-        if (!value || !value.trim()) {
-          return 'Branch name cannot be empty';
-        }
+        if (!value || !value.trim()) return 'Branch name cannot be empty';
         const branchReg = /^(?!-)(?!.*?\.\.)(?!.*?\/\.)[^\s~^:?*\[\\@\{\}]+(?<!\.lock)(?<!\/)(?<!\.)$/;
-        if (!branchReg.test(value)) {
-          return 'Invalid git branch name format';
-        }
-        if (branches.includes(value.trim())) {
-          return 'A branch with this name already exists locally';
-        }
+        if (!branchReg.test(value)) return 'Invalid git branch name format';
+        if (branches.includes(value.trim())) return 'A branch with this name already exists locally';
         return null;
       }
     });
 
-    if (!newBranchName) {
-      return;
-    }
+    if (!newBranchName) return;
 
-    // Create branch
     const createResult = await runBackendScript('managers/local_repo.py', {
       action: 'create_branch',
       repo_path: repoPath,
@@ -1188,102 +1872,869 @@ async function manageBranchCommand(payload) {
 
     if (createResult && createResult.success) {
       vscode.window.showInformationMessage(`Created and checked out branch: ${newBranchName.trim()}`);
+      await updateBranchHistory(repoName, newBranchName.trim());
       await refreshReposCommand();
     } else {
       vscode.window.showErrorMessage(createResult.message || `Failed to create branch: ${newBranchName.trim()}`);
     }
-  } else if (pick.label === '🔀 Merge Branch') {
+  }
+
+  else if (action === 'merge') {
+    const branchesResult = await runBackendScript('managers/local_repo.py', {
+      action: 'list_branches',
+      repo_path: repoPath
+    });
+    const branches = (branchesResult && branchesResult.success) ? branchesResult.branches : [];
     const eligibleBranches = branches.filter(b => b !== currentBranch);
+
     if (eligibleBranches.length === 0) {
       vscode.window.showInformationMessage('No eligible local branches to merge.');
       return;
     }
 
-    const mergeItems = eligibleBranches.map(b => ({
-      label: b,
-      branchName: b
-    }));
-
+    const mergeItems = eligibleBranches.map(b => ({ label: b, branchName: b }));
     const selectedMergeItem = await vscode.window.showQuickPick(mergeItems, {
       title: 'Merge Branch',
       placeHolder: `Select branch to merge into ${currentBranch}`
     });
 
-    if (!selectedMergeItem) {
-      return;
-    }
+    if (!selectedMergeItem) return;
 
-    const sourceBranch = selectedMergeItem.branchName;
     const confirm = await vscode.window.showWarningMessage(
-      `Merge ${sourceBranch} into ${currentBranch}?`,
+      `Merge ${selectedMergeItem.branchName} into ${currentBranch}?`,
       { modal: true },
       'Merge',
       'Cancel'
     );
 
-    if (confirm !== 'Merge') {
-      return;
-    }
+    if (confirm !== 'Merge') return;
 
     const mergeResult = await runBackendScript('managers/local_repo.py', {
       action: 'merge_branch',
       repo_path: repoPath,
-      branch: sourceBranch
+      branch: selectedMergeItem.branchName
     });
 
     if (mergeResult && mergeResult.success) {
-      vscode.window.showInformationMessage(`Successfully merged ${sourceBranch} into ${currentBranch}.`);
+      vscode.window.showInformationMessage(`Successfully merged ${selectedMergeItem.branchName} into ${currentBranch}.`);
       await refreshReposCommand();
     } else if (mergeResult && mergeResult.conflict) {
-      vscode.window.showErrorMessage("Merge conflicts detected. Please manually resolve conflicts in VS Code, then commit and push. Or run 'git merge --abort' to cancel.");
+      vscode.window.showErrorMessage("Merge conflicts detected. Please manually resolve conflicts in VS Code.");
       await refreshReposCommand();
     } else {
-      vscode.window.showErrorMessage(mergeResult.message || `Failed to merge ${sourceBranch} into ${currentBranch}.`);
+      vscode.window.showErrorMessage(mergeResult.message || `Failed to merge ${selectedMergeItem.branchName} into ${currentBranch}.`);
     }
-  } else if (pick.label === '🗑 Delete Branch') {
+  }
+
+  else if (action === 'delete') {
+    const branchesResult = await runBackendScript('managers/local_repo.py', {
+      action: 'list_branches',
+      repo_path: repoPath
+    });
+    const branches = (branchesResult && branchesResult.success) ? branchesResult.branches : [];
     const deletableBranches = branches.filter(b => b !== currentBranch);
+
     if (deletableBranches.length === 0) {
       vscode.window.showInformationMessage('No eligible local branches to delete.');
       return;
     }
 
-    const deleteItems = deletableBranches.map(b => ({
-      label: b,
-      branchName: b
-    }));
-
+    const deleteItems = deletableBranches.map(b => ({ label: b, branchName: b }));
     const selectedDeleteItem = await vscode.window.showQuickPick(deleteItems, {
       title: 'Delete Branch',
       placeHolder: 'Select branch to delete'
     });
 
-    if (!selectedDeleteItem) {
-      return;
-    }
+    if (!selectedDeleteItem) return;
 
-    const branchToDelete = selectedDeleteItem.branchName;
     const confirm = await vscode.window.showWarningMessage(
-      `Delete branch ${branchToDelete}? This action cannot be undone.`,
+      `Delete branch ${selectedDeleteItem.branchName}? This action cannot be undone.`,
       { modal: true },
       'Delete',
       'Cancel'
     );
 
-    if (confirm !== 'Delete') {
-      return;
-    }
+    if (confirm !== 'Delete') return;
 
     const deleteResult = await runBackendScript('managers/local_repo.py', {
       action: 'delete_branch',
       repo_path: repoPath,
-      branch: branchToDelete
+      branch: selectedDeleteItem.branchName
     });
 
     if (deleteResult && deleteResult.success) {
-      vscode.window.showInformationMessage(`Successfully deleted branch ${branchToDelete}.`);
+      vscode.window.showInformationMessage(`Successfully deleted branch ${selectedDeleteItem.branchName}.`);
       await refreshReposCommand();
     } else {
-      vscode.window.showErrorMessage(deleteResult.message || `Failed to delete branch ${branchToDelete}.`);
+      vscode.window.showErrorMessage(deleteResult.message || `Failed to delete branch ${selectedDeleteItem.branchName}.`);
+    }
+  }
+
+  else if (action === 'compare') {
+    const branchesResult = await runBackendScript('managers/local_repo.py', {
+      action: 'list_branches',
+      repo_path: repoPath
+    });
+    const branches = (branchesResult && branchesResult.success) ? branchesResult.branches : [];
+
+    const baseSelect = await vscode.window.showQuickPick(branches, {
+      title: 'Compare Branches: Choose Base Branch',
+      placeHolder: 'Select base branch'
+    });
+
+    if (!baseSelect) return;
+
+    const compareBranches = branches.filter(b => b !== baseSelect);
+    if (compareBranches.length === 0) {
+      vscode.window.showInformationMessage('No other branches to compare.');
+      return;
+    }
+
+    const compareSelect = await vscode.window.showQuickPick(compareBranches, {
+      title: 'Compare Branches: Choose Compare Branch',
+      placeHolder: 'Select branch to compare'
+    });
+
+    if (!compareSelect) return;
+
+    const compResult = await runBackendScript('managers/local_repo.py', {
+      action: 'compare_branches',
+      repo_path: repoPath,
+      base: baseSelect,
+      compare: compareSelect
+    });
+
+    if (!compResult || !compResult.success) {
+      vscode.window.showErrorMessage(compResult.error || 'Failed to compare branches.');
+      return;
+    }
+
+    const compOptions = [
+      { label: '🔍 View Commits', description: 'Show list of ahead and behind commits' },
+      { label: 'Cancel' }
+    ];
+
+    const compPick = await vscode.window.showQuickPick(compOptions, {
+      title: `Comparing ${baseSelect} ➔ ${compareSelect}`,
+      placeHolder: `Ahead: ${compResult.ahead} commits | Behind: ${compResult.behind} commits`
+    });
+
+    if (compPick && compPick.label === '🔍 View Commits') {
+      const logResult = await runBackendScript('managers/local_repo.py', {
+        action: 'get_compare_commits',
+        repo_path: repoPath,
+        base: baseSelect,
+        compare: compareSelect
+      });
+
+      if (!logResult || !logResult.success) {
+        vscode.window.showErrorMessage('Failed to load compare commits.');
+        return;
+      }
+
+      const logItems = [];
+      logItems.push({ label: 'Ahead Commits', kind: vscode.QuickPickItemKind.Separator });
+      if (logResult.ahead && logResult.ahead.length > 0) {
+        logResult.ahead.forEach(c => logItems.push({ label: `+ ${c}` }));
+      } else {
+        logItems.push({ label: 'No ahead commits' });
+      }
+
+      logItems.push({ label: 'Behind Commits', kind: vscode.QuickPickItemKind.Separator });
+      if (logResult.behind && logResult.behind.length > 0) {
+        logResult.behind.forEach(c => logItems.push({ label: `- ${c}` }));
+      } else {
+        logItems.push({ label: 'No behind commits' });
+      }
+
+      await vscode.window.showQuickPick(logItems, {
+        title: `Commits: ${baseSelect} ➔ ${compareSelect}`,
+        placeHolder: 'Close'
+      });
+    }
+  }
+
+  else if (action === 'history') {
+    const history = extensionContext.workspaceState.get(`branch-history-${repoName}`) || [];
+    if (history.length === 0) {
+      vscode.window.showInformationMessage('No branch history available for this repository.');
+      return;
+    }
+
+    const selectedHistoryItem = await vscode.window.showQuickPick(history, {
+      title: 'Recent Branches',
+      placeHolder: 'Select a branch from history to checkout'
+    });
+
+    if (selectedHistoryItem) {
+      const switchResult = await runBackendScript('managers/local_repo.py', {
+        action: 'switch_branch',
+        repo_path: repoPath,
+        branch: selectedHistoryItem
+      });
+
+      if (switchResult && switchResult.success) {
+        vscode.window.showInformationMessage(`Checked out branch: ${selectedHistoryItem}`);
+        await updateBranchHistory(repoName, selectedHistoryItem);
+        await refreshReposCommand();
+      } else {
+        vscode.window.showErrorMessage(switchResult.message || `Failed to checkout branch: ${selectedHistoryItem}`);
+      }
+    }
+  }
+
+  else if (action === 'fetch') {
+    const fetchResult = await runBackendScript('managers/local_repo.py', {
+      action: 'fetch_repo',
+      repo_path: repoPath
+    });
+
+    if (fetchResult && fetchResult.success) {
+      vscode.window.showInformationMessage("Fetched updates from remote successfully.");
+      await refreshReposCommand();
+    } else {
+      vscode.window.showErrorMessage(fetchResult.message || "Fetch failed.");
+    }
+  }
+
+  else if (action === 'pull') {
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: "Pulling updates from remote repository...",
+      cancellable: false
+    }, async () => {
+      const pullResult = await runBackendScript('managers/local_repo.py', {
+        action: 'pull_repo',
+        repo_path: repoPath
+      });
+
+      if (pullResult && pullResult.success) {
+        vscode.window.showInformationMessage("Pulled updates successfully.");
+        await refreshReposCommand();
+      } else if (pullResult && pullResult.conflict) {
+        vscode.window.showErrorMessage("Merge conflicts detected. Please resolve them manually.");
+        await refreshReposCommand();
+      } else {
+        vscode.window.showErrorMessage(pullResult.message || "Pull failed.");
+      }
+    });
+  }
+
+  else if (action === 'push') {
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: "Pushing changes to remote repository...",
+      cancellable: false
+    }, async () => {
+      const pushResult = await runBackendScript('managers/local_repo.py', {
+        action: 'push_repo',
+        repo_path: repoPath
+      });
+
+      if (pushResult && pushResult.success) {
+        vscode.window.showInformationMessage(pushResult.message || "Pushed changes successfully.");
+        await refreshReposCommand();
+      } else {
+        vscode.window.showErrorMessage(pushResult.message || "Push failed.");
+      }
+    });
+  }
+
+  else if (action === 'sync') {
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: "Syncing repository...",
+      cancellable: false
+    }, async (progress) => {
+      progress.report({ message: "Fetching remote updates..." });
+      const fetchRes = await runBackendScript('managers/local_repo.py', {
+        action: 'fetch_repo',
+        repo_path: repoPath
+      });
+      if (!fetchRes || !fetchRes.success) {
+        vscode.window.showErrorMessage(`Sync Fetch failed: ${fetchRes.message}`);
+        return;
+      }
+
+      progress.report({ message: "Checking upstream sync status..." });
+      const statusRes = await runBackendScript('managers/local_repo.py', {
+        action: 'get_upstream_status',
+        repo_path: repoPath
+      });
+
+      if (!statusRes || !statusRes.success) {
+        vscode.window.showErrorMessage(`Sync check failed: ${statusRes.error || "Upstream tracking branch is not configured."}`);
+        return;
+      }
+
+      if (!statusRes.has_upstream) {
+        progress.report({ message: "No upstream branch. Publishing local branch..." });
+        const pushRes = await runBackendScript('managers/local_repo.py', {
+          action: 'push_repo',
+          repo_path: repoPath
+        });
+        if (pushRes && pushRes.success) {
+          vscode.window.showInformationMessage("Sync completed: Published local branch to origin.");
+        } else {
+          vscode.window.showErrorMessage(`Sync push failed: ${pushRes.message}`);
+        }
+        await refreshReposCommand();
+        return;
+      }
+
+      const { ahead, behind } = statusRes;
+      let pulled = 0;
+      let pushed = 0;
+
+      if (behind > 0) {
+        progress.report({ message: `Pulling ${behind} remote commit(s)...` });
+        const pullRes = await runBackendScript('managers/local_repo.py', {
+          action: 'pull_repo',
+          repo_path: repoPath
+        });
+        if (!pullRes || !pullRes.success) {
+          if (pullRes && pullRes.conflict) {
+            vscode.window.showErrorMessage("Sync paused: Merge conflicts detected. Please resolve them manually.");
+          } else {
+            vscode.window.showErrorMessage(`Sync Pull failed: ${pullRes.message}`);
+          }
+          await refreshReposCommand();
+          return;
+        }
+        pulled = behind;
+      }
+
+      if (ahead > 0) {
+        progress.report({ message: `Pushing ${ahead} local commit(s)...` });
+        const pushRes = await runBackendScript('managers/local_repo.py', {
+          action: 'push_repo',
+          repo_path: repoPath
+        });
+        if (!pushRes || !pushRes.success) {
+          vscode.window.showErrorMessage(`Sync Push failed: ${pushRes.message}`);
+          await refreshReposCommand();
+          return;
+        }
+        pushed = ahead;
+      }
+
+      await refreshReposCommand();
+      vscode.window.showInformationMessage(`Sync completed: Pulled ${pulled} commit(s), pushed ${pushed} commit(s).`);
+    });
+  }
+
+  else if (action === 'rebase') {
+    const branchesResult = await runBackendScript('managers/local_repo.py', {
+      action: 'list_branches',
+      repo_path: repoPath
+    });
+    const branches = (branchesResult && branchesResult.success) ? branchesResult.branches : [];
+    const eligible = branches.filter(b => b !== currentBranch);
+
+    if (eligible.length === 0) {
+      vscode.window.showInformationMessage('No eligible local branches to rebase onto.');
+      return;
+    }
+
+    const targetBranch = await vscode.window.showQuickPick(eligible, {
+      title: 'Rebase current branch',
+      placeHolder: `Select target branch to rebase ${currentBranch} onto`
+    });
+
+    if (!targetBranch) return;
+
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `Rebasing ${currentBranch} onto ${targetBranch}...`,
+      cancellable: false
+    }, async () => {
+      const result = await runBackendScript('managers/local_repo.py', {
+        action: 'rebase_branch',
+        repo_path: repoPath,
+        branch: targetBranch
+      });
+
+      if (result && result.success) {
+        vscode.window.showInformationMessage(`Successfully rebased ${currentBranch} onto ${targetBranch}.`);
+        await refreshReposCommand();
+      } else {
+        vscode.window.showErrorMessage(result.message || `Rebase failed. Conflicted? Run 'git rebase --abort'.`);
+      }
+    });
+  }
+
+  else if (action === 'cherryPick') {
+    const commitHash = await vscode.window.showInputBox({
+      title: 'Cherry Pick',
+      prompt: 'Enter the commit hash to cherry pick onto current branch',
+      ignoreFocusOut: true,
+      validateInput: (value) => {
+        if (!value || !value.trim()) return 'Commit hash is required';
+        return null;
+      }
+    });
+
+    if (!commitHash) return;
+
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `Cherry picking ${commitHash}...`,
+      cancellable: false
+    }, async () => {
+      const result = await runBackendScript('managers/local_repo.py', {
+        action: 'cherry_pick',
+        repo_path: repoPath,
+        commit: commitHash.trim()
+      });
+
+      if (result && result.success) {
+        vscode.window.showInformationMessage(`Successfully cherry-picked ${commitHash}.`);
+        await refreshReposCommand();
+      } else {
+        vscode.window.showErrorMessage(result.message || `Cherry pick failed.`);
+      }
+    });
+  }
+
+  else if (action === 'stash') {
+    const stashOpts = [
+      { label: 'Push changes', subAction: 'push' },
+      { label: 'Pop latest stash', subAction: 'pop' },
+      { label: 'Apply latest stash', subAction: 'apply' },
+      { label: 'Clear all stashes', subAction: 'clear' },
+      { label: 'List stashes', subAction: 'list' }
+    ];
+
+    const pick = await vscode.window.showQuickPick(stashOpts, {
+      title: 'Git Stash Management',
+      placeHolder: 'Select stash sub-action'
+    });
+
+    if (!pick) return;
+
+    if (pick.subAction === 'push') {
+      const message = await vscode.window.showInputBox({
+        prompt: 'Enter stash message (optional)',
+        ignoreFocusOut: true
+      });
+      const result = await runBackendScript('managers/local_repo.py', {
+        action: 'stash_changes',
+        repo_path: repoPath,
+        sub_action: 'push',
+        message: message || ''
+      });
+      if (result && result.success) {
+        vscode.window.showInformationMessage(result.message || 'Stashed changes successfully.');
+        await refreshReposCommand();
+      } else {
+        vscode.window.showErrorMessage(result.message || 'Failed to stash changes.');
+      }
+    } else if (pick.subAction === 'list') {
+      const result = await runBackendScript('managers/local_repo.py', {
+        action: 'stash_changes',
+        repo_path: repoPath,
+        sub_action: 'list'
+      });
+      if (result && result.success) {
+        const list = result.stashes || [];
+        if (list.length === 0) {
+          vscode.window.showInformationMessage('No stashes found.');
+        } else {
+          await vscode.window.showQuickPick(list.map(s => ({ label: s })), { title: 'Stash List' });
+        }
+      } else {
+        vscode.window.showErrorMessage(result.message || 'Failed to list stashes.');
+      }
+    } else {
+      const result = await runBackendScript('managers/local_repo.py', {
+        action: 'stash_changes',
+        repo_path: repoPath,
+        sub_action: pick.subAction
+      });
+      if (result && result.success) {
+        vscode.window.showInformationMessage(result.message || `Stash ${pick.subAction} completed successfully.`);
+        await refreshReposCommand();
+      } else {
+        vscode.window.showErrorMessage(result.message || `Failed to ${pick.subAction} stash.`);
+      }
+    }
+  }
+
+  else if (action === 'tags') {
+    const tagOpts = [
+      { label: 'List tags', subAction: 'list' },
+      { label: 'Create tag', subAction: 'create' },
+      { label: 'Delete tag', subAction: 'delete' }
+    ];
+
+    const pick = await vscode.window.showQuickPick(tagOpts, {
+      title: 'Git Tags Management',
+      placeHolder: 'Select tag sub-action'
+    });
+
+    if (!pick) return;
+
+    if (pick.subAction === 'list') {
+      const result = await runBackendScript('managers/local_repo.py', {
+        action: 'manage_tags',
+        repo_path: repoPath,
+        sub_action: 'list'
+      });
+      if (result && result.success) {
+        const list = result.tags || [];
+        if (list.length === 0) {
+          vscode.window.showInformationMessage('No tags found.');
+        } else {
+          await vscode.window.showQuickPick(list.map(t => ({ label: t })), { title: 'Tags List' });
+        }
+      } else {
+        vscode.window.showErrorMessage(result.message || 'Failed to list tags.');
+      }
+    } else if (pick.subAction === 'create') {
+      const tagName = await vscode.window.showInputBox({
+        prompt: 'Enter tag name',
+        ignoreFocusOut: true,
+        validateInput: v => (!v || !v.trim()) ? 'Tag name is required' : null
+      });
+      if (!tagName) return;
+
+      const tagMsg = await vscode.window.showInputBox({
+        prompt: 'Enter tag message (optional)',
+        ignoreFocusOut: true
+      });
+
+      const result = await runBackendScript('managers/local_repo.py', {
+        action: 'manage_tags',
+        repo_path: repoPath,
+        sub_action: 'create',
+        tag_name: tagName.trim(),
+        message: tagMsg || ''
+      });
+
+      if (result && result.success) {
+        vscode.window.showInformationMessage(`Successfully created tag ${tagName}.`);
+        await refreshReposCommand();
+      } else {
+        vscode.window.showErrorMessage(result.message || 'Failed to create tag.');
+      }
+    } else if (pick.subAction === 'delete') {
+      const listRes = await runBackendScript('managers/local_repo.py', {
+        action: 'manage_tags',
+        repo_path: repoPath,
+        sub_action: 'list'
+      });
+      const list = (listRes && listRes.success) ? listRes.tags || [] : [];
+      if (list.length === 0) {
+        vscode.window.showInformationMessage('No tags to delete.');
+        return;
+      }
+
+      const tagToDelete = await vscode.window.showQuickPick(list, { title: 'Select tag to delete' });
+      if (!tagToDelete) return;
+
+      const result = await runBackendScript('managers/local_repo.py', {
+        action: 'manage_tags',
+        repo_path: repoPath,
+        sub_action: 'delete',
+        tag_name: tagToDelete
+      });
+
+      if (result && result.success) {
+        vscode.window.showInformationMessage(`Successfully deleted tag ${tagToDelete}.`);
+        await refreshReposCommand();
+      } else {
+        vscode.window.showErrorMessage(result.message || 'Failed to delete tag.');
+      }
+    }
+  }
+
+  else if (action === 'renameBranch') {
+    const newName = await vscode.window.showInputBox({
+      title: `Rename current branch (${currentBranch})`,
+      prompt: 'Enter new branch name',
+      ignoreFocusOut: true,
+      validateInput: v => (!v || !v.trim()) ? 'Branch name is required' : null
+    });
+
+    if (!newName) return;
+
+    const result = await runBackendScript('managers/local_repo.py', {
+      action: 'rename_branch',
+      repo_path: repoPath,
+      new_name: newName.trim()
+    });
+
+    if (result && result.success) {
+      vscode.window.showInformationMessage(`Successfully renamed branch to ${newName.trim()}.`);
+      await updateBranchHistory(repoName, newName.trim());
+      await refreshReposCommand();
+    } else {
+      vscode.window.showErrorMessage(result.message || 'Failed to rename branch.');
+    }
+  }
+
+  else if (action === 'branchFromCommit') {
+    const commitHash = await vscode.window.showInputBox({
+      prompt: 'Enter commit hash or branch/tag name to start from',
+      ignoreFocusOut: true,
+      validateInput: v => (!v || !v.trim()) ? 'Start point is required' : null
+    });
+    if (!commitHash) return;
+
+    const newBranch = await vscode.window.showInputBox({
+      prompt: 'Enter new branch name',
+      ignoreFocusOut: true,
+      validateInput: v => (!v || !v.trim()) ? 'Branch name is required' : null
+    });
+    if (!newBranch) return;
+
+    const result = await runBackendScript('managers/local_repo.py', {
+      action: 'create_branch_from_commit',
+      repo_path: repoPath,
+      branch: newBranch.trim(),
+      commit: commitHash.trim()
+    });
+
+    if (result && result.success) {
+      vscode.window.showInformationMessage(`Successfully created and checked out branch ${newBranch.trim()} from ${commitHash.trim()}.`);
+      await updateBranchHistory(repoName, newBranch.trim());
+      await refreshReposCommand();
+    } else {
+      vscode.window.showErrorMessage(result.message || 'Failed to checkout branch from commit.');
+    }
+  }
+
+  else if (action === 'cleanMerged') {
+    const result = await runBackendScript('managers/local_repo.py', {
+      action: 'clean_merged_branches',
+      repo_path: repoPath
+    });
+
+    if (result && result.success) {
+      vscode.window.showInformationMessage(result.message || 'Cleaned merged branches successfully.');
+      await refreshReposCommand();
+    } else {
+      vscode.window.showErrorMessage(result.message || 'Failed to clean merged branches.');
+    }
+  }
+
+  else if (action === 'remotePushCurrent') {
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `Pushing ${currentBranch} to origin...`,
+      cancellable: false
+    }, async () => {
+      const result = await runBackendScript('managers/local_repo.py', {
+        action: 'remote_push_current',
+        repo_path: repoPath
+      });
+      if (result && result.success) {
+        vscode.window.showInformationMessage(result.message || 'Pushed successfully.');
+        await refreshReposCommand();
+      } else {
+        vscode.window.showErrorMessage(result.message || 'Failed to push current branch.');
+      }
+    });
+  }
+
+  else if (action === 'remotePullSpecific') {
+    const branchesRes = await runBackendScript('managers/local_repo.py', {
+      action: 'remote_list_branches',
+      repo_path: repoPath
+    });
+    const list = (branchesRes && branchesRes.success) ? branchesRes.branches || [] : [];
+    if (list.length === 0) {
+      vscode.window.showInformationMessage('No remote branches found.');
+      return;
+    }
+
+    const selectedBranch = await vscode.window.showQuickPick(list, { title: 'Select remote branch to pull' });
+    if (!selectedBranch) return;
+
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `Pulling ${selectedBranch}...`,
+      cancellable: false
+    }, async () => {
+      const parts = selectedBranch.split('/');
+      const remote = parts[0];
+      const branch = parts.slice(1).join('/');
+
+      const result = await runBackendScript('managers/local_repo.py', {
+        action: 'remote_pull_specific',
+        repo_path: repoPath,
+        remote,
+        branch
+      });
+      if (result && result.success) {
+        vscode.window.showInformationMessage(result.message || `Pulled ${selectedBranch} successfully.`);
+        await refreshReposCommand();
+      } else {
+        vscode.window.showErrorMessage(result.message || `Failed to pull remote branch.`);
+      }
+    });
+  }
+
+  else if (action === 'remoteBrowseBranches') {
+    const branchesRes = await runBackendScript('managers/local_repo.py', {
+      action: 'remote_list_branches',
+      repo_path: repoPath
+    });
+    const list = (branchesRes && branchesRes.success) ? branchesRes.branches || [] : [];
+    if (list.length === 0) {
+      vscode.window.showInformationMessage('No remote branches found.');
+      return;
+    }
+    await vscode.window.showQuickPick(list.map(b => ({ label: b })), { title: 'Remote Branches' });
+  }
+
+  else if (action === 'remoteAdd') {
+    const name = await vscode.window.showInputBox({
+      prompt: 'Enter remote name (e.g., origin)',
+      ignoreFocusOut: true,
+      validateInput: v => (!v || !v.trim()) ? 'Remote name is required' : null
+    });
+    if (!name) return;
+
+    const url = await vscode.window.showInputBox({
+      prompt: 'Enter remote git repository URL',
+      ignoreFocusOut: true,
+      validateInput: v => (!v || !v.trim()) ? 'Remote URL is required' : null
+    });
+    if (!url) return;
+
+    const result = await runBackendScript('managers/local_repo.py', {
+      action: 'remote_add',
+      repo_path: repoPath,
+      name: name.trim(),
+      url: url.trim()
+    });
+
+    if (result && result.success) {
+      vscode.window.showInformationMessage(`Successfully added remote ${name.trim()}.`);
+      await refreshReposCommand();
+    } else {
+      vscode.window.showErrorMessage(result.message || 'Failed to add remote.');
+    }
+  }
+
+  else if (action === 'remoteRename') {
+    const remotesRes = await runBackendScript('managers/local_repo.py', {
+      action: 'list_remotes',
+      repo_path: repoPath
+    });
+    const remotes = (remotesRes && remotesRes.success) ? remotesRes.remotes || [] : [];
+    if (remotes.length === 0) {
+      vscode.window.showInformationMessage('No remotes found to rename.');
+      return;
+    }
+
+    const selectedRemote = await vscode.window.showQuickPick(remotes, { title: 'Select remote to rename' });
+    if (!selectedRemote) return;
+
+    const newName = await vscode.window.showInputBox({
+      prompt: `Enter new name for remote ${selectedRemote}`,
+      ignoreFocusOut: true,
+      validateInput: v => (!v || !v.trim()) ? 'Remote name is required' : null
+    });
+    if (!newName) return;
+
+    const result = await runBackendScript('managers/local_repo.py', {
+      action: 'remote_rename',
+      repo_path: repoPath,
+      old_name: selectedRemote,
+      new_name: newName.trim()
+    });
+
+    if (result && result.success) {
+      vscode.window.showInformationMessage(`Successfully renamed remote to ${newName.trim()}.`);
+      await refreshReposCommand();
+    } else {
+      vscode.window.showErrorMessage(result.message || 'Failed to rename remote.');
+    }
+  }
+
+  else if (action === 'remoteRemove') {
+    const remotesRes = await runBackendScript('managers/local_repo.py', {
+      action: 'list_remotes',
+      repo_path: repoPath
+    });
+    const remotes = (remotesRes && remotesRes.success) ? remotesRes.remotes || [] : [];
+    if (remotes.length === 0) {
+      vscode.window.showInformationMessage('No remotes found to remove.');
+      return;
+    }
+
+    const selectedRemote = await vscode.window.showQuickPick(remotes, { title: 'Select remote to remove' });
+    if (!selectedRemote) return;
+
+    const result = await runBackendScript('managers/local_repo.py', {
+      action: 'remote_remove',
+      repo_path: repoPath,
+      name: selectedRemote
+    });
+
+    if (result && result.success) {
+      vscode.window.showInformationMessage(`Successfully removed remote ${selectedRemote}.`);
+      await refreshReposCommand();
+    } else {
+      vscode.window.showErrorMessage(result.message || 'Failed to remove remote.');
+    }
+  }
+
+  else if (action === 'remotePrune') {
+    const remotesRes = await runBackendScript('managers/local_repo.py', {
+      action: 'list_remotes',
+      repo_path: repoPath
+    });
+    const remotes = (remotesRes && remotesRes.success) ? remotesRes.remotes || [] : [];
+    if (remotes.length === 0) {
+      vscode.window.showInformationMessage('No remotes found to prune.');
+      return;
+    }
+
+    const selectedRemote = await vscode.window.showQuickPick(remotes, { title: 'Select remote to prune' });
+    if (!selectedRemote) return;
+
+    const result = await runBackendScript('managers/local_repo.py', {
+      action: 'remote_prune',
+      repo_path: repoPath,
+      name: selectedRemote
+    });
+
+    if (result && result.success) {
+      vscode.window.showInformationMessage(`Successfully pruned remote ${selectedRemote}.`);
+      await refreshReposCommand();
+    } else {
+      vscode.window.showErrorMessage(result.message || 'Failed to prune remote.');
+    }
+  }
+
+  else if (action === 'remoteChangeUpstream') {
+    const branchesRes = await runBackendScript('managers/local_repo.py', {
+      action: 'remote_list_branches',
+      repo_path: repoPath
+    });
+    const list = (branchesRes && branchesRes.success) ? branchesRes.branches || [] : [];
+    if (list.length === 0) {
+      vscode.window.showInformationMessage('No remote branches found.');
+      return;
+    }
+
+    const selectedBranch = await vscode.window.showQuickPick(list, { title: 'Select remote tracking branch' });
+    if (!selectedBranch) return;
+
+    const result = await runBackendScript('managers/local_repo.py', {
+      action: 'remote_change_upstream',
+      repo_path: repoPath,
+      branch: selectedBranch
+    });
+
+    if (result && result.success) {
+      vscode.window.showInformationMessage(`Successfully set tracking branch to ${selectedBranch}.`);
+      await refreshReposCommand();
+    } else {
+      vscode.window.showErrorMessage(result.message || 'Failed to set upstream tracking branch.');
     }
   }
 }
@@ -1299,7 +2750,7 @@ async function commitAndPushCommand(payload) {
     const inputBox = vscode.window.createInputBox();
     inputBox.title = 'Commit & Push';
     inputBox.prompt = 'Auto-Generate Commit Message';
-    inputBox.placeHolder = 'Type a commit message or click the $(wand) button above to generate one.';
+    inputBox.placeholder = 'Click the 🪄 icon on the top right to auto-generate, or type your own commit message...';
     inputBox.ignoreFocusOut = true;
     inputBox.buttons = [
       {
@@ -1398,14 +2849,14 @@ async function commitAndPushCommand(payload) {
         }
 
         inputBox.value = generated.message || '';
-        inputBox.placeholder = 'Enter a commit message';
+        inputBox.placeholder = 'Click the 🪄 icon on the top right to auto-generate, or type your own commit message...';
         inputBox.enabled = true;
         inputBox.busy = false;
         inputBox.validationMessage = '';
       } catch (error) {
         inputBox.enabled = true;
         inputBox.busy = false;
-        inputBox.placeholder = 'Enter a commit message';
+        inputBox.placeholder = 'Click the 🪄 icon on the top right to auto-generate, or type your own commit message...';
         inputBox.value = '';
         const errorMessage = error && error.message ? error.message : 'Failed to generate commit message.';
         inputBox.validationMessage = errorMessage;
@@ -1573,7 +3024,16 @@ function activate(context) {
     vscode.window.registerWebviewViewProvider('github-automator.actionsView', actionsViewProvider)
   );
 
+  function closeWebviewPopovers() {
+    if (reposViewProvider && reposViewProvider.view) {
+      reposViewProvider.view.webview.postMessage({ command: 'closePopovers' });
+    }
+  }
+
   context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(() => closeWebviewPopovers()),
+    vscode.window.onDidChangeTextEditorSelection(() => closeWebviewPopovers()),
+    vscode.window.onDidChangeVisibleTextEditors(() => closeWebviewPopovers()),
     vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('github-automator.pinActiveRepositoryToTop')) {
         reposViewProvider.update();
@@ -1586,6 +3046,7 @@ function activate(context) {
     vscode.commands.registerCommand('github-automator.logout', () => logoutCommand()),
     vscode.commands.registerCommand('github-automator.showPanel', () => showPanelCommand()),
     vscode.commands.registerCommand('github-automator.refreshRepos', () => refreshReposCommand()),
+    vscode.commands.registerCommand('github-automator.repoOptions', () => repoOptionsCommand()),
     vscode.commands.registerCommand('github-automator.createRepo', () => createRepoCommand()),
     vscode.commands.registerCommand('github-automator.deleteRepo', () => deleteRepoCommand()),
     vscode.commands.registerCommand('github-automator.cloneRepo', () => cloneRepoCommand()),

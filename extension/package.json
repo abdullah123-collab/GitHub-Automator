@@ -35,6 +35,11 @@
         "icon": "$(plus)"
       },
       {
+        "command": "github-automator.repoOptions",
+        "title": "Repository Options",
+        "icon": "$(menu)"
+      },
+      {
         "command": "github-automator.deleteRepo",
         "title": "GitHub Automator: Delete Repository"
       },
@@ -76,19 +81,24 @@
           "group": "navigation@1"
         },
         {
-          "command": "github-automator.showPanel",
+          "command": "github-automator.repoOptions",
           "when": "view == github-automator.repoView",
           "group": "navigation@2"
         },
         {
-          "command": "github-automator.authenticate",
+          "command": "github-automator.showPanel",
           "when": "view == github-automator.repoView",
           "group": "navigation@3"
         },
         {
-          "command": "github-automator.logout",
+          "command": "github-automator.authenticate",
           "when": "view == github-automator.repoView",
           "group": "navigation@4"
+        },
+        {
+          "command": "github-automator.logout",
+          "when": "view == github-automator.repoView",
+          "group": "navigation@5"
         }
       ],
       "view/item/context": [

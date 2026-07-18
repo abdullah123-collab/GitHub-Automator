@@ -266,6 +266,203 @@ if __name__ == "__main__":
             branch = args.get("branch", "")
             ok, msg = _run(["git", "branch", "-D", branch], cwd=repo_path)
             print(json.dumps({"success": ok, "message": msg}))
+        elif action == "compare_branches":
+            base = args.get("base", "")
+            compare = args.get("compare", "")
+            ok, output = _run(["git", "rev-list", "--left-right", "--count", f"{base}...{compare}"], cwd=repo_path)
+            if ok:
+                parts = output.split()
+                if len(parts) == 2:
+                    # behind is left (base), ahead is right (compare)
+                    print(json.dumps({"success": True, "behind": int(parts[0]), "ahead": int(parts[1])}))
+                else:
+                    print(json.dumps({"success": False, "error": f"Unexpected count output: {output}"}))
+            else:
+                print(json.dumps({"success": False, "error": output}))
+        elif action == "get_compare_commits":
+            base = args.get("base", "")
+            compare = args.get("compare", "")
+            # Get commits unique to compare (ahead)
+            ok_ahead, out_ahead = _run(["git", "log", "-n", "50", "--oneline", f"{base}..{compare}"], cwd=repo_path)
+            # Get commits unique to base (behind)
+            ok_behind, out_behind = _run(["git", "log", "-n", "50", "--oneline", f"{compare}..{base}"], cwd=repo_path)
+            
+            ahead_commits = [line.strip() for line in out_ahead.splitlines() if line.strip()] if ok_ahead else []
+            behind_commits = [line.strip() for line in out_behind.splitlines() if line.strip()] if ok_behind else []
+            print(json.dumps({
+                "success": True,
+                "ahead": ahead_commits,
+                "behind": behind_commits
+            }))
+        elif action == "fetch_repo":
+            ok, msg = _run(["git", "fetch"], cwd=repo_path)
+            print(json.dumps({"success": ok, "message": msg}))
+        elif action == "pull_repo":
+            ok, msg = _run(["git", "pull"], cwd=repo_path)
+            conflict = False
+            if not ok and "conflict" in msg.lower():
+                conflict = True
+            print(json.dumps({"success": ok, "message": msg, "conflict": conflict}))
+        elif action == "push_repo":
+            ok, msg = _run(["git", "push"], cwd=repo_path)
+            if not ok and ("no upstream branch" in msg.lower() or "set-upstream" in msg.lower()):
+                # Get current branch
+                ok_br, current_br = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path)
+                if ok_br and current_br:
+                    ok, msg = _run(["git", "push", "--set-upstream", "origin", current_br], cwd=repo_path)
+            print(json.dumps({"success": ok, "message": msg}))
+        elif action == "get_upstream_status":
+            ok_up, up_branch = _run(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=repo_path)
+            if not ok_up:
+                print(json.dumps({"success": True, "has_upstream": False, "ahead": 0, "behind": 0}))
+            else:
+                ok, output = _run(["git", "rev-list", "--left-right", "--count", "HEAD...@{u}"], cwd=repo_path)
+                if ok:
+                    parts = output.split()
+                    if len(parts) == 2:
+                        print(json.dumps({"success": True, "has_upstream": True, "ahead": int(parts[0]), "behind": int(parts[1])}))
+                    else:
+                        print(json.dumps({"success": False, "error": f"Unexpected output: {output}"}))
+                else:
+                    print(json.dumps({"success": False, "error": output}))
+        elif action == "rebase_branch":
+            branch = args.get("branch", "")
+            ok, msg = _run(["git", "rebase", branch], cwd=repo_path)
+            conflict = False
+            if not ok and ("conflict" in msg.lower() or "merge conflict" in msg.lower()):
+                conflict = True
+            print(json.dumps({"success": ok, "message": msg, "conflict": conflict}))
+        elif action == "cherry_pick":
+            commit_hash = args.get("commit_hash", "")
+            ok, msg = _run(["git", "cherry-pick", commit_hash], cwd=repo_path)
+            conflict = False
+            if not ok and ("conflict" in msg.lower() or "merge conflict" in msg.lower()):
+                conflict = True
+            print(json.dumps({"success": ok, "message": msg, "conflict": conflict}))
+        elif action == "stash_changes":
+            sub = args.get("sub_action", "")
+            if sub == "push":
+                msg_val = args.get("message", "Stashed by GitHub Automator")
+                ok, msg = _run(["git", "stash", "push", "-m", msg_val], cwd=repo_path)
+            elif sub == "pop":
+                ok, msg = _run(["git", "stash", "pop"], cwd=repo_path)
+            elif sub == "apply":
+                ok, msg = _run(["git", "stash", "apply"], cwd=repo_path)
+            elif sub == "clear":
+                ok, msg = _run(["git", "stash", "clear"], cwd=repo_path)
+            elif sub == "list":
+                ok, msg = _run(["git", "stash", "list"], cwd=repo_path)
+                if ok:
+                    stashes = [line.strip() for line in msg.splitlines() if line.strip()]
+                    print(json.dumps({"success": True, "stashes": stashes}))
+                    sys.exit(0)
+            else:
+                ok, msg = False, f"Unknown stash sub action: {sub}"
+            print(json.dumps({"success": ok, "message": msg}))
+        elif action == "manage_tags":
+            sub = args.get("sub_action", "")
+            if sub == "list":
+                ok, msg = _run(["git", "tag"], cwd=repo_path)
+                if ok:
+                    tags = [line.strip() for line in msg.splitlines() if line.strip()]
+                    print(json.dumps({"success": True, "tags": tags}))
+                    sys.exit(0)
+            elif sub == "create":
+                tag_name = args.get("tag", "")
+                ok, msg = _run(["git", "tag", tag_name], cwd=repo_path)
+            elif sub == "delete":
+                tag_name = args.get("tag", "")
+                ok, msg = _run(["git", "tag", "-d", tag_name], cwd=repo_path)
+            else:
+                ok, msg = False, f"Unknown tag sub action: {sub}"
+            print(json.dumps({"success": ok, "message": msg}))
+        elif action == "rename_branch":
+            new_name = args.get("new_name", "")
+            ok, msg = _run(["git", "branch", "-m", new_name], cwd=repo_path)
+            print(json.dumps({"success": ok, "message": msg}))
+        elif action == "create_branch_from_commit":
+            branch_name = args.get("branch", "")
+            commit_hash = args.get("commit_hash", "")
+            ok, msg = _run(["git", "checkout", "-b", branch_name, commit_hash], cwd=repo_path)
+            print(json.dumps({"success": ok, "message": msg}))
+        elif action == "clean_merged_branches":
+            # Get merged local branches (excluding current branch, main, master)
+            ok_curr, current = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path)
+            current = current.strip() if ok_curr else ""
+            
+            ok_merged, out_merged = _run(["git", "branch", "--merged"], cwd=repo_path)
+            if not ok_merged:
+                print(json.dumps({"success": False, "message": out_merged}))
+                sys.exit(0)
+                
+            branches = []
+            for line in out_merged.splitlines():
+                b = line.replace("*", "").strip()
+                if b and b != current and b not in ["main", "master", "develop"]:
+                    branches.append(b)
+            
+            cleaned = []
+            failed = []
+            for b in branches:
+                ok_del, out_del = _run(["git", "branch", "-d", b], cwd=repo_path)
+                if ok_del:
+                    cleaned.append(b)
+                else:
+                    failed.append(f"{b} ({out_del.strip()})")
+            
+            summary = f"Cleaned {len(cleaned)} branch(es): {', '.join(cleaned)}."
+            if failed:
+                summary += f" Failed to clean {len(failed)}: {'; '.join(failed)}."
+            print(json.dumps({"success": True, "message": summary, "cleaned": cleaned, "failed": failed}))
+        elif action == "remote_push_current":
+            # Get current branch
+            ok_br, current_br = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path)
+            if ok_br and current_br:
+                ok, msg = _run(["git", "push", "origin", current_br], cwd=repo_path)
+                print(json.dumps({"success": ok, "message": msg}))
+            else:
+                print(json.dumps({"success": False, "message": "Failed to get current branch."}))
+        elif action == "remote_pull_specific":
+            remote = args.get("remote", "origin")
+            branch = args.get("branch", "main")
+            ok, msg = _run(["git", "pull", remote, branch], cwd=repo_path)
+            print(json.dumps({"success": ok, "message": msg}))
+        elif action == "remote_list_branches":
+            ok, msg = _run(["git", "branch", "-r", "--format=%(refname:short)"], cwd=repo_path)
+            if ok:
+                branches = [line.strip() for line in msg.splitlines() if line.strip()]
+                print(json.dumps({"success": True, "branches": branches}))
+            else:
+                print(json.dumps({"success": False, "message": msg}))
+        elif action == "remote_add":
+            name = args.get("name", "")
+            url = args.get("url", "")
+            ok, msg = _run(["git", "remote", "add", name, url], cwd=repo_path)
+            print(json.dumps({"success": ok, "message": msg}))
+        elif action == "remote_rename":
+            old = args.get("old", "")
+            new_name = args.get("new", "")
+            ok, msg = _run(["git", "remote", "rename", old, new_name], cwd=repo_path)
+            print(json.dumps({"success": ok, "message": msg}))
+        elif action == "remote_remove":
+            name = args.get("name", "")
+            ok, msg = _run(["git", "remote", "remove", name], cwd=repo_path)
+            print(json.dumps({"success": ok, "message": msg}))
+        elif action == "remote_prune":
+            name = args.get("name", "origin")
+            ok, msg = _run(["git", "remote", "prune", name], cwd=repo_path)
+            print(json.dumps({"success": ok, "message": msg}))
+        elif action == "remote_change_upstream":
+            upstream = args.get("upstream", "")
+            ok, msg = _run(["git", "branch", f"--set-upstream-to={upstream}"], cwd=repo_path)
+            print(json.dumps({"success": ok, "message": msg}))
+        elif action == "list_remotes":
+            ok, msg = _run(["git", "remote"], cwd=repo_path)
+            if ok:
+                remotes = [line.strip() for line in msg.splitlines() if line.strip()]
+                print(json.dumps({"success": True, "remotes": remotes}))
+            else:
+                print(json.dumps({"success": False, "message": msg}))
         else:
             print(json.dumps({"success": False, "error": f"Unknown action: {action}"}))
     except Exception as e:
