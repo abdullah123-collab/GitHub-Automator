@@ -206,27 +206,32 @@ def get_all_cloned_repos(workspace_path: str = None) -> set:
         if not repo_path or not os.path.isdir(os.path.join(repo_path, ".git")):
             continue
             
-        owner = info.get("owner")
-        repo = info.get("repo")
-        if owner and repo:
-            cloned_set.add(f"{owner.lower()}/{repo.lower()}")
+        if "owner" in info:
+            owner = info.get("owner")
+            repo = info.get("repo")
+            if owner and repo:
+                cloned_set.add(f"{owner.lower()}/{repo.lower()}")
         else:
             paths_to_check.append((repo_name, repo_path))
 
     if workspace_path and workspace_path not in [info.get("path") for info in registry.values() if info.get("path")]:
-        paths_to_check.append((None, workspace_path))
+        paths_to_check.append((workspace_path, workspace_path))
 
     for repo_name, repo_path in paths_to_check:
         if not repo_path or not os.path.isdir(os.path.join(repo_path, ".git")):
             continue
         remote_url = _get_remote_url(repo_path)
         local_owner, local_repo = _extract_owner_repo(remote_url)
+        
         if local_owner and local_repo:
             cloned_set.add(f"{local_owner.lower()}/{local_repo.lower()}")
-            if repo_name and repo_name in registry:
-                registry[repo_name]["owner"] = local_owner
-                registry[repo_name]["repo"] = local_repo
-                changed = True
+            
+        if repo_name:
+            if repo_name not in registry:
+                registry[repo_name] = {"path": repo_path}
+            registry[repo_name]["owner"] = local_owner if local_owner else None
+            registry[repo_name]["repo"] = local_repo if local_repo else None
+            changed = True
 
     if changed:
         save_registry(registry)

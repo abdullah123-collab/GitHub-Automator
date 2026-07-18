@@ -28,7 +28,14 @@ class RepositoriesWebviewProvider {
     this.view = webviewView;
     webviewView.webview.options = { enableScripts: true };
     webviewView.webview.onDidReceiveMessage(message => this.handleMessage(message));
-    await this.refreshState();
+
+    // If repos are already loaded from a previous session, just re-render
+    // the cached state instead of calling the GitHub API again.
+    if (this.state.repos.length > 0) {
+      this.update();
+    } else {
+      await this.refreshState();
+    }
   }
 
   async handleMessage(message) {
@@ -89,6 +96,14 @@ class RepositoriesWebviewProvider {
   setRepos(repos) {
     this.state.repos = repos || [];
     this.update();
+  }
+
+  appendRepos(repos) {
+    this.state.repos = this.state.repos.concat(repos);
+    if (this.view) {
+      const html = repos.map(repo => this.renderRepoCard(repo)).join('');
+      this.view.webview.postMessage({ command: 'appendRepos', payload: html });
+    }
   }
 
   setWorkspace(name) {
@@ -227,6 +242,21 @@ class RepositoriesWebviewProvider {
                 const owner = element.getAttribute('data-owner');
                 element.ondblclick = function() { editDescription(message.payload.repoName, owner, element); };
               }
+            } else if (message.command === 'appendRepos') {
+              const grid = document.querySelector('.repo-grid');
+              if (grid) {
+                grid.insertAdjacentHTML('beforeend', message.payload);
+              }
+            } else if (message.command === 'repoCreated') {
+              const grid = document.querySelector('.repo-grid');
+              if (grid) {
+                grid.insertAdjacentHTML('afterbegin', message.payload.html);
+              }
+            } else if (message.command === 'repoDeleted') {
+              const element = document.getElementById('repo-card-' + message.payload.repoName);
+              if (element) {
+                element.remove();
+              }
             }
           });
 
@@ -277,10 +307,10 @@ class RepositoriesWebviewProvider {
     const isActive = repo.name && repo.name === this.state.workspace;
     const activeClass = isActive ? ' active' : '';
     const playSvg = isActive ? `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="margin-right:4px"><path d="M5 2l6 6-6 6z"/></svg>` : '';
-    const owner = repo.owner && repo.owner.login ? repo.owner.login : '';
+    const owner = typeof repo.owner === 'string' ? repo.owner : (repo.owner && repo.owner.login ? repo.owner.login : '');
     const cloneIcon = repo.is_cloned ? folderSvg : cloudSvg;
 
-    return `<div class="repo-card${activeClass}">
+    return `<div class="repo-card${activeClass}" id="repo-card-${repoName}">
       <div class="repo-header" style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
         <div class="repo-title-group" style="display: flex; align-items: center; gap: 8px;">
           <div class="repo-name" style="font-weight: 600; display: flex; align-items: center; color: var(--vscode-textLink-foreground);">${playSvg} ${repo.name || 'Repository'}</div>
@@ -501,7 +531,11 @@ async function logoutCommand() {
   await vscode.window.showInformationMessage('Signed out from GitHub Automator.');
 }
 
+let isRefreshing = false;
+
 async function refreshReposCommand() {
+  if (isRefreshing) return;
+  isRefreshing = true;
   console.time('refreshReposCommand');
   try {
     const token = await getStoredSecret(AUTH_SECRET_KEY);
@@ -512,6 +546,7 @@ async function refreshReposCommand() {
       reposViewProvider.setRepos([]);
       reposViewProvider.setLoading(false);
       console.timeEnd('refreshReposCommand');
+      isRefreshing = false;
       return;
     }
 
@@ -535,6 +570,7 @@ async function refreshReposCommand() {
           reposViewProvider.setError(result && result.error ? result.error : 'Unable to load repositories');
           reposViewProvider.setLoading(false);
           console.timeEnd('refreshReposCommand');
+          isRefreshing = false;
           return;
         } else {
           log(`Failed to load page ${page}: ${result && result.error ? result.error : 'Unknown error'}`);
@@ -551,7 +587,7 @@ async function refreshReposCommand() {
         await updateAuthContext(true);
         reposViewProvider.setLoading(false);
       } else {
-        reposViewProvider.setRepos(allRepos);
+        reposViewProvider.appendRepos(result.repos || []);
       }
 
       hasMore = result.has_more === true;
@@ -564,6 +600,7 @@ async function refreshReposCommand() {
     reposViewProvider.setLoading(false);
   }
   console.timeEnd('refreshReposCommand');
+  isRefreshing = false;
 }
 
 async function openRepoCommand(repoName, cloneUrl) {
@@ -717,7 +754,20 @@ async function createRepoCommand() {
     }
 
     await vscode.window.showInformationMessage(`Created repository ${result.name}.`);
-    await refreshReposCommand();
+    
+    if (reposViewProvider) {
+      const repoHTML = reposViewProvider.renderRepoCard({
+        name: result.name,
+        private: privateValue,
+        description: description || '',
+        clone_url: result.clone_url,
+        owner: result.owner || '',
+        is_cloned: false
+      });
+      if (reposViewProvider.view) {
+        reposViewProvider.view.webview.postMessage({ command: 'repoCreated', payload: { html: repoHTML } });
+      }
+    }
   } catch (error) {
     log(`createRepo failed: ${error && error.message ? error.message : error}`);
     await vscode.window.showErrorMessage(`Repository creation failed: ${error && error.message ? error.message : error}`);
@@ -751,7 +801,9 @@ async function deleteRepoCommand() {
     }
 
     await vscode.window.showInformationMessage(`Deleted repository ${repoName}.`);
-    await refreshReposCommand();
+    if (reposViewProvider && reposViewProvider.view) {
+      reposViewProvider.view.webview.postMessage({ command: 'repoDeleted', payload: { repoName } });
+    }
   } catch (error) {
     log(`deleteRepo failed: ${error && error.message ? error.message : error}`);
     await vscode.window.showErrorMessage(`Repository deletion failed: ${error && error.message ? error.message : error}`);
@@ -794,7 +846,9 @@ async function deleteRepoFromCard(repoName, owner) {
     }
 
     await vscode.window.showInformationMessage(`Deleted repository ${repoName}.`);
-    await refreshReposCommand();
+    if (reposViewProvider && reposViewProvider.view) {
+      reposViewProvider.view.webview.postMessage({ command: 'repoDeleted', payload: { repoName } });
+    }
   } catch (error) {
     log(`deleteRepoFromCard failed: ${error && error.message ? error.message : error}`);
     await vscode.window.showErrorMessage(`Repository deletion failed: ${error && error.message ? error.message : error}`);
@@ -823,19 +877,19 @@ async function updateRepoDescription(repoName, owner, description) {
     if (!result || !result.success) {
       const message = result && result.error ? result.error : 'Failed to update description';
       vscode.window.showErrorMessage(message);
-      if (actionsViewProvider && actionsViewProvider.view) {
-        actionsViewProvider.view.webview.postMessage({ command: 'descriptionUpdated', payload: { repoName, success: false, error: message } });
+      if (reposViewProvider && reposViewProvider.view) {
+        reposViewProvider.view.webview.postMessage({ command: 'descriptionUpdated', payload: { repoName, success: false, error: message } });
       }
     } else {
-      if (actionsViewProvider && actionsViewProvider.view) {
-        actionsViewProvider.view.webview.postMessage({ command: 'descriptionUpdated', payload: { repoName, success: true, description } });
+      if (reposViewProvider && reposViewProvider.view) {
+        reposViewProvider.view.webview.postMessage({ command: 'descriptionUpdated', payload: { repoName, success: true, description } });
       }
     }
   } catch (error) {
     log(`updateRepoDescription failed: ${error && error.message ? error.message : error}`);
     vscode.window.showErrorMessage(`Error updating description: ${error && error.message ? error.message : error}`);
-    if (actionsViewProvider && actionsViewProvider.view) {
-      actionsViewProvider.view.webview.postMessage({ command: 'descriptionUpdated', payload: { repoName, success: false, error: error && error.message ? error.message : String(error) } });
+    if (reposViewProvider && reposViewProvider.view) {
+      reposViewProvider.view.webview.postMessage({ command: 'descriptionUpdated', payload: { repoName, success: false, error: error && error.message ? error.message : String(error) } });
     }
   }
   console.timeEnd(`updateRepoDescription-${repoName}`);
@@ -1202,9 +1256,6 @@ function activate(context) {
 
   context.subscriptions.push(...commands);
   updateAuthContext(false).catch(() => {});
-  refreshReposCommand().catch(error => {
-    log(`initial refresh failed: ${error && error.message ? error.message : error}`);
-  });
 
   return { extendContextMenu: undefined };
 }

@@ -34,7 +34,8 @@ def create_repo(api: GitHubAPI, name: str, private: bool, description: str) -> d
             "success": True,
             "name": result.get("name"),
             "url": result.get("html_url"),
-            "clone_url": result.get("clone_url")
+            "clone_url": result.get("clone_url"),
+            "owner": result.get("owner", {}).get("login")
         }
     except urllib.error.HTTPError as e:
         body = json.loads(e.read().decode())
