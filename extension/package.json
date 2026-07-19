@@ -1,0 +1,165 @@
+{
+  "name": "github-automator",
+  "displayName": "GitHub Automator",
+  "description": "Automate GitHub workflows from VS Code",
+  "version": "0.2.0",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished", "onView:github-automator"],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "github-automator.authenticate",
+        "title": "GitHub Automator: Authenticate",
+        "icon": "$(key)" 
+      },
+      {
+        "command": "github-automator.logout",
+        "title": "GitHub Automator: Logout",
+        "icon": "$(sign-out)"
+      },
+      {
+        "command": "github-automator.showPanel",
+        "title": "GitHub Automator: Open Panel",
+        "icon": "$(play)"
+      },
+      {
+        "command": "github-automator.refreshRepos",
+        "title": "GitHub Automator: Refresh Repositories",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "github-automator.createRepo",
+        "title": "GitHub Automator: Create Repository",
+        "icon": "$(plus)"
+      },
+      {
+        "command": "github-automator.repoOptions",
+        "title": "Repository Options",
+        "icon": "$(menu)"
+      },
+      {
+        "command": "github-automator.deleteRepo",
+        "title": "GitHub Automator: Delete Repository"
+      },
+      {
+        "command": "github-automator.cloneRepo",
+        "title": "GitHub Automator: Clone Repository"
+      },
+      {
+        "command": "github-automator.initializeRepo",
+        "title": "Initialize Repository Locally",
+        "icon": "$(plus)"
+      },
+      {
+        "command": "github-automator.commitAndPush",
+        "title": "GitHub Automator: ↑ Commit & Push",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "github-automator.aiGenerate",
+        "title": "GitHub Automator: ✨ AI Generate Commit Message",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "github-automator.setAnthropicKey",
+        "title": "GitHub Automator: Set Anthropic API Key",
+        "icon": "$(key)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "github-automator.createRepo",
+          "when": "view == github-automator.repoView",
+          "group": "navigation@0"
+        },
+        {
+          "command": "github-automator.refreshRepos",
+          "when": "view == github-automator.repoView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "github-automator.repoOptions",
+          "when": "view == github-automator.repoView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "github-automator.showPanel",
+          "when": "view == github-automator.repoView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "github-automator.authenticate",
+          "when": "view == github-automator.repoView",
+          "group": "navigation@4"
+        },
+        {
+          "command": "github-automator.logout",
+          "when": "view == github-automator.repoView",
+          "group": "navigation@5"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "github-automator.initializeRepo",
+          "when": "view == github-automator.repoView && viewItem == repo",
+          "group": "inline@0"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "github-automator",
+          "title": "GitHub Automator",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "github-automator": [
+        {
+          "id": "github-automator.repoView",
+          "name": "Repositories",
+          "type": "webview"
+        },
+        {
+          "id": "github-automator.actionsView",
+          "name": "Git Actions",
+          "type": "webview",
+          "when": "githubAutomator.authenticated"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "GitHub Automator",
+      "properties": {
+        "github-automator.defaultBranch": {
+          "type": "string",
+          "default": "main",
+          "description": "Default branch to use when initializing new repositories or falling back on git push."
+        },
+        "github-automator.autoPush": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically push after a successful commit in the Git Actions view."
+        },
+        "github-automator.pinActiveRepositoryToTop": {
+          "type": "boolean",
+          "default": true,
+          "description": "Always move the active repository to the top of the list."
+        },
+        "github-automator.anthropicModel": {
+          "type": "string",
+          "default": "claude-3-5-haiku-latest",
+          "description": "Anthropic Claude model to use for AI commit messages."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "@octokit/rest": "^20.0.2"
+  }
+}
