@@ -1,10 +1,17 @@
 const vscode = require('vscode');
 const path = require('path');
+<<<<<<< HEAD
+const { runPythonScript, getPersistentPythonProcess } = require('./pythonBridge');
+
+const EXTENSION_NAME = 'GitHub Automator';
+const AUTH_SECRET_KEY = 'github-automator.token';
+=======
 const { runPythonScript } = require('./pythonBridge');
 
 const EXTENSION_NAME = 'GitHub Automator';
 const AUTH_SECRET_KEY = 'github-automator.token';
 const ANTHROPIC_SECRET_KEY = 'github-automator.anthropic-key';
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 
 let outputChannel;
 let extensionContext;
@@ -32,8 +39,11 @@ class RepositoriesWebviewProvider {
       webviewView.webview.postMessage({ command: 'closePopovers' });
     });
 
+<<<<<<< HEAD
+=======
     // If repos are already loaded from a previous session, just re-render
     // the cached state instead of calling the GitHub API again.
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
     if (this.state.repos.length > 0) {
       this.update();
     } else {
@@ -73,6 +83,12 @@ class RepositoriesWebviewProvider {
         case 'updateDescription':
           await updateRepoDescription(message.payload && message.payload.repoName, message.payload && message.payload.owner, message.payload && message.payload.description);
           break;
+<<<<<<< HEAD
+        case 'autoGenerateExistingDesc':
+          await autoGenerateExistingDescCommand(message.payload);
+          break;
+=======
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
         case 'manageBranch':
           await manageBranchCommand(message.payload);
           break;
@@ -134,6 +150,10 @@ class RepositoriesWebviewProvider {
   }
 
   async refreshState() {
+<<<<<<< HEAD
+    console.log('[DIAGNOSTIC] refreshState START');
+=======
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
     const token = await getStoredSecret(AUTH_SECRET_KEY);
     this.state.authenticated = Boolean(token);
     this.state.workspace = getWorkspacePath() ? path.basename(getWorkspacePath()) : 'No workspace';
@@ -144,6 +164,10 @@ class RepositoriesWebviewProvider {
     } else {
       this.setRepos([]);
     }
+<<<<<<< HEAD
+    console.log('[DIAGNOSTIC] refreshState END');
+=======
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
   }
 
   update() {
@@ -815,10 +839,32 @@ class RepositoriesWebviewProvider {
           function editDescription(repoName, owner, element) {
             const currentDesc = element.innerText;
             element.ondblclick = null;
+<<<<<<< HEAD
+            element.innerHTML = '<div style="display: flex; gap: 4px; align-items: flex-start; width: 100%;">' +
+              '<textarea class="desc-edit-input" style="flex: 1; box-sizing: border-box; padding: 4px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-focusBorder); outline: none; border-radius: 2px; min-height: 60px; resize: vertical; font-family: inherit;">' + currentDesc.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</textarea>' +
+              '<button title="✨ Auto Generate Description" style="background: transparent; border: none; cursor: pointer; padding: 4px; color: var(--vscode-icon-foreground); display: flex; align-items: center; justify-content: center; margin-top: 2px;">' +
+              '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.158 13.844L12.784 5.22l-.707-.707-8.625 8.624.706.707zm7.575-8.544l2.122 2.122 1.414-1.414-2.121-2.122-1.415 1.414zM1.5 15.5l1.414 1.414 2.121-2.121L3.62 12.67 1.5 14.793v.707zM11 2.5a.5.5 0 0 1 .5-.5h2V0h1v2h2v1h-2v2h-1V3h-2a.5.5 0 0 1-.5-.5zm-4-1a.5.5 0 0 1 .5-.5h1V0h1v1h1v1H9v1H8V2H7a.5.5 0 0 1-.5-.5z"/></svg>' +
+              '</button></div>';
+            const input = element.querySelector('textarea');
+            const button = element.querySelector('button');
+            input.focus();
+            
+            button.onmousedown = (e) => e.preventDefault();
+            button.onclick = (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              element.dataset.generating = 'true';
+              input.disabled = true;
+              button.innerHTML = '<span class="loading" style="width: 14px; height: 14px; display: inline-block; border-radius: 50%;"></span>';
+              post('autoGenerateExistingDesc', { repoName, owner });
+            };
+            
+=======
             element.innerHTML = '<input type="text" class="desc-edit-input" value="' + currentDesc.replace(/"/g, '&quot;') + '" style="width: 100%; box-sizing: border-box; padding: 4px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-focusBorder); outline: none; border-radius: 2px;" />';
             const input = element.querySelector('input');
             input.focus();
             
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
             const save = () => {
               input.onblur = null;
               const newDesc = input.value;
@@ -829,15 +875,34 @@ class RepositoriesWebviewProvider {
             
             const cancel = () => {
               element.innerHTML = currentDesc;
+<<<<<<< HEAD
+              element.dataset.generating = 'false';
+=======
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
               element.ondblclick = function() { editDescription(repoName, owner, element); };
             };
             
             input.onkeydown = (e) => {
+<<<<<<< HEAD
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                save();
+              }
+              if (e.key === 'Escape') cancel();
+            };
+            
+            input.onblur = (e) => {
+              if (element.dataset.generating === 'true') return;
+              if (e.relatedTarget === button || button.contains(e.relatedTarget)) return;
+              cancel();
+            };
+=======
               if (e.key === 'Enter') save();
               if (e.key === 'Escape') cancel();
             };
             
             input.onblur = cancel;
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
           }
 
            window.addEventListener('message', event => {
@@ -848,6 +913,24 @@ class RepositoriesWebviewProvider {
             } else if (message.command === 'openRepoOptionsPopover') {
               openRepoOptionsPopover(message.payload);
               window.focus();
+<<<<<<< HEAD
+            } else if (message.command === 'descriptionGenerated') {
+              const el = document.getElementById('desc-' + message.payload.repoName);
+              if (el) {
+                el.dataset.generating = 'false';
+                const input = el.querySelector('textarea');
+                const btn = el.querySelector('button');
+                if (input && btn) {
+                  input.disabled = false;
+                  if (message.payload.success) {
+                    input.value = message.payload.description;
+                  }
+                  btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.158 13.844L12.784 5.22l-.707-.707-8.625 8.624.706.707zm7.575-8.544l2.122 2.122 1.414-1.414-2.121-2.122-1.415 1.414zM1.5 15.5l1.414 1.414 2.121-2.121L3.62 12.67 1.5 14.793v.707zM11 2.5a.5.5 0 0 1 .5-.5h2V0h1v2h2v1h-2v2h-1V3h-2a.5.5 0 0 1-.5-.5zm-4-1a.5.5 0 0 1 .5-.5h1V0h1v1h1v1H9v1H8V2H7a.5.5 0 0 1-.5-.5z"/></svg>';
+                  input.focus();
+                }
+              }
+=======
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
             } else if (message.command === 'closePopovers') {
               closeAllPopovers();
             } else if (message.command === 'reposUpdated') {
@@ -1195,7 +1278,10 @@ async function authenticateCommand(tokenOverride) {
 
 async function logoutCommand() {
   await setStoredSecret(AUTH_SECRET_KEY, '');
+<<<<<<< HEAD
+=======
   await setStoredSecret(ANTHROPIC_SECRET_KEY, '');
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
   reposViewProvider.setAuthenticated(false);
   actionsViewProvider.setAuthenticated(false);
   await updateAuthContext(false);
@@ -1364,6 +1450,14 @@ async function createRepoCommand() {
     const description = await new Promise((resolve) => {
       const inputBox = vscode.window.createInputBox();
       inputBox.title = 'Create Repository';
+<<<<<<< HEAD
+      inputBox.placeholder = 'Click the $(sparkle) icon on the top right to generate from repo name';
+      inputBox.ignoreFocusOut = true;
+      inputBox.buttons = [
+        {
+          iconPath: new vscode.ThemeIcon('sparkle'),
+          tooltip: '✨ Auto Generate Description'
+=======
       inputBox.prompt = 'Auto-Generate Repository Description';
       inputBox.placeholder = 'Click the 🪄 icon on the top right to generate a description, or type one manually...';
       inputBox.ignoreFocusOut = true;
@@ -1371,6 +1465,7 @@ async function createRepoCommand() {
         {
           iconPath: new vscode.ThemeIcon('wand'),
           tooltip: '✨ Auto Generate'
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
         }
       ];
 
@@ -1385,22 +1480,39 @@ async function createRepoCommand() {
       });
 
       inputBox.onDidTriggerButton(async (button) => {
+<<<<<<< HEAD
+        if (button === inputBox.buttons[0]) {
+=======
         if (button.iconPath.id === 'wand') {
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
           const prevValue = inputBox.value;
           inputBox.busy = true;
           inputBox.enabled = false;
           inputBox.placeholder = 'Generating description...';
           inputBox.value = '';
 
+<<<<<<< HEAD
+          const config = vscode.workspace.getConfiguration('github-automator');
+          const geminiModel = config.get('geminiModel', 'gemini-3.6-flash');
+
+          const generated = await runBackendScript('services/ai_description_cli.py', {
+            repo_name: name,
+            model: geminiModel
+=======
           const apiKey = await getStoredSecret(ANTHROPIC_SECRET_KEY);
           const generated = await runBackendScript('services/ai_description_cli.py', {
             repo_name: name,
             api_key: apiKey || ''
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
           });
 
           if (generated && generated.success) {
             inputBox.value = generated.description || prevValue;
+<<<<<<< HEAD
+            inputBox.placeholder = 'Click the $(sparkle) icon on the top right to generate from repo name';
+=======
             inputBox.placeholder = 'Click the 🪄 icon on the top right to generate a description, or type one manually...';
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
             inputBox.enabled = true;
             inputBox.busy = false;
             inputBox.validationMessage = '';
@@ -1408,7 +1520,11 @@ async function createRepoCommand() {
             const errorMessage = generated && generated.error ? generated.error : 'Generation failed';
             inputBox.enabled = true;
             inputBox.busy = false;
+<<<<<<< HEAD
+            inputBox.placeholder = 'Click the $(wand) icon on the top right to generate a description, or type one manually...';
+=======
             inputBox.placeholder = 'Click the 🪄 icon on the top right to generate a description, or type one manually...';
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
             inputBox.value = prevValue;
             inputBox.validationMessage = errorMessage;
           }
@@ -1577,6 +1693,15 @@ async function updateRepoDescription(repoName, owner, description) {
         reposViewProvider.view.webview.postMessage({ command: 'descriptionUpdated', payload: { repoName, success: false, error: message } });
       }
     } else {
+<<<<<<< HEAD
+      if (reposViewProvider && reposViewProvider.state && reposViewProvider.state.repos) {
+        const repoIndex = reposViewProvider.state.repos.findIndex(r => r.name === repoName);
+        if (repoIndex !== -1) {
+          reposViewProvider.state.repos[repoIndex].description = description;
+        }
+      }
+=======
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
       if (reposViewProvider && reposViewProvider.view) {
         reposViewProvider.view.webview.postMessage({ command: 'descriptionUpdated', payload: { repoName, success: true, description } });
       }
@@ -1591,6 +1716,57 @@ async function updateRepoDescription(repoName, owner, description) {
   console.timeEnd(`updateRepoDescription-${repoName}`);
 }
 
+<<<<<<< HEAD
+async function autoGenerateExistingDescCommand(payload) {
+  const { repoName, owner } = payload;
+  try {
+    const pathResult = await runBackendScript('managers/repo_manager.py', {
+      action: 'check_repo_exists',
+      repo_name: repoName
+    });
+
+    let repo_path = '';
+    if (pathResult && pathResult.success && pathResult.exists) {
+      repo_path = pathResult.path;
+    }
+
+    const config = vscode.workspace.getConfiguration('github-automator');
+    const geminiModel = config.get('geminiModel', 'gemini-3.6-flash');
+
+    const generated = await runBackendScript('services/ai_description_cli.py', {
+      repo_name: repoName,
+      repo_path: repo_path,
+      model: geminiModel
+    });
+
+    if (reposViewProvider && reposViewProvider.view) {
+      if (!generated || !generated.success) {
+        const err = generated ? generated.error : 'Failed to generate';
+        vscode.window.showErrorMessage(`Auto Description failed: ${err}`);
+      }
+      reposViewProvider.view.webview.postMessage({
+        command: 'descriptionGenerated',
+        payload: {
+          repoName,
+          success: generated && generated.success,
+          description: generated ? generated.description : '',
+          error: generated ? generated.error : 'Failed to generate'
+        }
+      });
+    }
+  } catch (error) {
+    vscode.window.showErrorMessage(`Auto Description failed: ${error && error.message ? error.message : String(error)}`);
+    if (reposViewProvider && reposViewProvider.view) {
+      reposViewProvider.view.webview.postMessage({
+        command: 'descriptionGenerated',
+        payload: { repoName, success: false, error: error && error.message ? error.message : String(error) }
+      });
+    }
+  }
+}
+
+=======
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 async function cloneRepoCommand() {
   try {
     if (!await ensureAuthenticated()) {
@@ -2781,7 +2957,11 @@ async function commitAndPushCommand(payload) {
     const inputBox = vscode.window.createInputBox();
     inputBox.title = 'Commit & Push';
     inputBox.prompt = 'Auto-Generate Commit Message';
+<<<<<<< HEAD
+    inputBox.placeholder = 'Click the $(wand) icon on the top right to auto-generate, or type your own commit message...';
+=======
     inputBox.placeholder = 'Click the 🪄 icon on the top right to auto-generate, or type your own commit message...';
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
     inputBox.ignoreFocusOut = true;
     inputBox.buttons = [
       {
@@ -2863,8 +3043,12 @@ async function commitAndPushCommand(payload) {
       try {
         const diffResult = await runBackendScript('managers/commit_manager.py', {
           action: 'get_diff',
+<<<<<<< HEAD
+          repo_path: repoPath
+=======
           repo_path: repoPath,
           staged: true
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
         });
 
         if (!diffResult || !diffResult.success) {
@@ -2872,12 +3056,20 @@ async function commitAndPushCommand(payload) {
         }
 
         const config = vscode.workspace.getConfiguration('github-automator');
+<<<<<<< HEAD
+        const geminiModel = config.get('geminiModel', 'gemini-3.6-flash');
+
+        const generated = await runBackendScript('services/ai_commit_cli.py', {
+          diff: diffResult.diff || '',
+          model: geminiModel
+=======
         const anthropicModel = config.get('anthropicModel', 'claude-3-5-haiku-latest');
         const apiKey = (await getStoredSecret(ANTHROPIC_SECRET_KEY)) || '';
         const generated = await runBackendScript('services/ai_commit_cli.py', {
           diff: diffResult.diff || '',
           api_key: apiKey,
           model: anthropicModel
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
         });
 
         if (!generated || !generated.success) {
@@ -2885,14 +3077,22 @@ async function commitAndPushCommand(payload) {
         }
 
         inputBox.value = generated.message || prevValue;
+<<<<<<< HEAD
+        inputBox.placeholder = 'Click the $(sparkle) icon on the top right to auto-generate, or type manually';
+=======
         inputBox.placeholder = 'Click the 🪄 icon on the top right to auto-generate, or type your own commit message...';
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
         inputBox.enabled = true;
         inputBox.busy = false;
         inputBox.validationMessage = '';
       } catch (error) {
         inputBox.enabled = true;
         inputBox.busy = false;
+<<<<<<< HEAD
+        inputBox.placeholder = 'Click the $(sparkle) icon on the top right to auto-generate, or type manually';
+=======
         inputBox.placeholder = 'Click the 🪄 icon on the top right to auto-generate, or type your own commit message...';
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
         inputBox.value = prevValue;
         const errorMessage = error && error.message ? error.message : 'Failed to generate commit message.';
         inputBox.validationMessage = errorMessage;
@@ -2927,12 +3127,20 @@ async function aiGenerateCommand() {
     }
 
     const config = vscode.workspace.getConfiguration('github-automator');
+<<<<<<< HEAD
+    const geminiModel = config.get('geminiModel', 'gemini-3.6-flash');
+
+    const generated = await runBackendScript('services/ai_commit_cli.py', {
+      diff: diffResult.diff || '',
+      model: geminiModel
+=======
     const anthropicModel = config.get('anthropicModel', 'claude-3-5-haiku-latest');
     const apiKey = (await getStoredSecret(ANTHROPIC_SECRET_KEY)) || '';
     const generated = await runBackendScript('services/ai_commit_cli.py', {
       diff: diffResult.diff || '',
       api_key: apiKey,
       model: anthropicModel
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
     });
 
     if (!generated || !generated.success) {
@@ -2968,6 +3176,8 @@ async function aiGenerateCommand() {
   }
 }
 
+<<<<<<< HEAD
+=======
 async function setAnthropicKeyCommand() {
   try {
     const key = await vscode.window.showInputBox({ prompt: 'Enter Anthropic API key', password: true, ignoreFocusOut: true });
@@ -2981,6 +3191,7 @@ async function setAnthropicKeyCommand() {
     await vscode.window.showErrorMessage(`Unable to save Anthropic key: ${error && error.message ? error.message : error}`);
   }
 }
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 
 async function showPanelCommand() {
   const panel = vscode.window.createWebviewPanel('githubAutomatorPanel', 'GitHub Automator', vscode.ViewColumn.One, { enableScripts: true });
@@ -3030,6 +3241,28 @@ function activate(context) {
   outputChannel = createOutputChannel();
   context.subscriptions.push(outputChannel);
 
+<<<<<<< HEAD
+  // Automatically migrate legacy 'gemini-1.5-flash' setting to 'gemini-3.6-flash'
+  try {
+    const config = vscode.workspace.getConfiguration('github-automator');
+    const currentModel = config.get('geminiModel');
+    if (currentModel === 'gemini-1.5-flash') {
+      config.update('geminiModel', 'gemini-3.6-flash', vscode.ConfigurationTarget.Global);
+      log('Automatically migrated legacy geminiModel setting from gemini-1.5-flash to gemini-3.6-flash');
+    }
+  } catch (e) {
+    log(`Failed to migrate legacy geminiModel setting: ${e && e.message ? e.message : e}`);
+  }
+
+  // Warm up the Python daemon in the background so it's ready before the user's first action
+  try {
+    getPersistentPythonProcess(getBackendRoot());
+  } catch (e) {
+    log(`Daemon warm-up failed: ${e && e.message ? e.message : e}`);
+  }
+
+=======
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
   reposViewProvider = new RepositoriesWebviewProvider(context);
   actionsViewProvider = new ActionsWebviewProvider(context);
 
@@ -3066,8 +3299,12 @@ function activate(context) {
     vscode.commands.registerCommand('github-automator.cloneRepo', () => cloneRepoCommand()),
     vscode.commands.registerCommand('github-automator.initializeRepo', () => initializeRepoCommand()),
     vscode.commands.registerCommand('github-automator.commitAndPush', () => commitAndPushCommand()),
+<<<<<<< HEAD
+    vscode.commands.registerCommand('github-automator.aiGenerate', () => aiGenerateCommand())
+=======
     vscode.commands.registerCommand('github-automator.aiGenerate', () => aiGenerateCommand()),
     vscode.commands.registerCommand('github-automator.setAnthropicKey', () => setAnthropicKeyCommand())
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
   ];
 
   context.subscriptions.push(...commands);

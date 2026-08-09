@@ -25,7 +25,11 @@ The application now includes a powerful GUI for both GitHub and local Git manage
 
 ### **Key Features (Local Mode)**
 - ✅ **Commit & Push**: One-click workflow (stage → commit → push)
+<<<<<<< HEAD
+- ✨ **AI Generate Commits**: Auto-create professional commit messages using Gemini AI
+=======
 - ✨ **AI Generate Commits**: Auto-create professional commit messages using Claude AI
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 - 📝 **Preview Changes**: Review diffs before committing
 - 📊 **Real-Time Status**: Monitor branch and file changes
 - 🔍 **Auto-Detect Repos**: Automatically detect existing .git directories

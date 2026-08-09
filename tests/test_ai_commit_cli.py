@@ -13,7 +13,11 @@ class AiCommitCliTests(unittest.TestCase):
         payload = json.dumps({
             'diff': 'diff --git a/file.txt b/file.txt\n@@ -1 +1,2 @@\n-old\n+new\n+line',
             'api_key': '',
+<<<<<<< HEAD
+            'model': 'gemini-3.6-flash'
+=======
             'model': 'claude-3-5-haiku-latest'
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
         })
 
         result = subprocess.run(

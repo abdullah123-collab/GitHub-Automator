@@ -26,9 +26,15 @@ def create_document():
         'Clone Detection Logic: Implemented state-tracking to show whether a remote repository is already cloned locally.',
         'Repository Deletion: Built complete workflow from UI confirmation to GitHub API deletion.',
         'Git Automation (Branch Method): Automated "git push --set-upstream origin <branch>" fallback mechanism for newly created branches.',
+<<<<<<< HEAD
+        'Extension Settings: Implemented customizable VS Code settings schema for defaultBranch, autoPush, and geminiModel.',
+        'Repository Pagination: Upgraded GitHub API integration to fetch up to 500 repositories.',
+        'AI Commit Generation: Fixed API key and Model specification bugs for the Google Gemini API integration.',
+=======
         'Extension Settings: Implemented customizable VS Code settings schema for defaultBranch, autoPush, and anthropicModel.',
         'Repository Pagination: Upgraded GitHub API integration to fetch up to 500 repositories.',
         'AI Commit Generation: Fixed API key and Model specification bugs for the Anthropic API integration.',
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
         'Merge Conflict UI: Added interactive VS Code notifications to help users easily abort merges or view conflicting files.',
         'Standalone GUI Refactor: Unified the standalone tkinter GUI with the central commit_manager and repo_registry.',
         'Test Suites: Repaired test_gui.py paths and resolved Windows console encoding bugs.'

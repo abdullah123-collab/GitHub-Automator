@@ -28,6 +28,11 @@ function detectPython() {
   return ['python'];
 }
 
+<<<<<<< HEAD
+console.error(`[DAEMON SPAWN] time=${Date.now()}`);
+
+=======
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 function getPersistentPythonProcess(backendRoot) {
   if (persistentPythonProcess) return persistentPythonProcess;
 
@@ -78,6 +83,10 @@ function getPersistentPythonProcess(backendRoot) {
     persistentPythonProcess = null;
     for (const [id, { reject }] of pendingRequests) {
       reject(new Error(`Python daemon exited with code ${code}`));
+<<<<<<< HEAD
+      console.error(`[DAEMON CLOSED] code=${code}, time=${Date.now()}`);
+=======
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
     }
     pendingRequests.clear();
   });
@@ -102,5 +111,10 @@ function runPythonScript(scriptPath, payload, backendRoot) {
 }
 
 module.exports = {
+<<<<<<< HEAD
+  runPythonScript,
+  getPersistentPythonProcess
+=======
   runPythonScript
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 };

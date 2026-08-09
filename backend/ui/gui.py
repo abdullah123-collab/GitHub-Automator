@@ -21,6 +21,26 @@ import threading
 import subprocess
 import tkinter as tk
 import os
+<<<<<<< HEAD
+from pathlib import Path
+
+# Load .env
+try:
+    from dotenv import load_dotenv
+    project_root = Path(__file__).resolve().parents[2]
+    env_path = project_root / ".env"
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path)
+    else:
+        backend_root = Path(__file__).resolve().parents[1]
+        env_path = backend_root / ".env"
+        if env_path.exists():
+            load_dotenv(dotenv_path=env_path)
+except ImportError:
+    pass
+
+=======
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 from tkinter import ttk, messagebox, simpledialog, filedialog, scrolledtext
 from services.github_api import GitHubAPI
 from services.ai_commit import generate_commit_message
@@ -101,7 +121,11 @@ class GitHubAutomatorApp:
         self.repos = []
         self.local_repo_path = None
         self.repo_search_var = tk.StringVar(value="")
+<<<<<<< HEAD
+        self.gemini_key = os.getenv("GEMINI_API_KEY", "")
+=======
         self.anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
         self.status_var = tk.StringVar(value="Ready")
         self.scroll_frame = None
         self.canvas = None
@@ -389,7 +413,11 @@ class GitHubAutomatorApp:
 
     def _inline_generate_commit_message(self, text_widget):
         """Generate a commit message and insert it into the provided Text widget."""
+<<<<<<< HEAD
+        if not self.gemini_key:
+=======
         if not self.anthropic_key:
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
             # generate using rule-based fallback (generate_commit_message works without key)
             pass
 
@@ -423,7 +451,11 @@ class GitHubAutomatorApp:
                 if not combined_diff.strip():
                     result = {"success": True, "message": "chore: update files"}
                 else:
+<<<<<<< HEAD
+                    result = generate_commit_message(combined_diff[:4000], self.gemini_key)
+=======
                     result = generate_commit_message(combined_diff[:4000], self.anthropic_key)
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 
                 def finish_ui():
                     self._stop_loading_border(text_widget)
@@ -472,7 +504,11 @@ class GitHubAutomatorApp:
             try:
                 prompt = "\n".join(prompt_parts) or "Create a short professional GitHub repository description."
                 # reuse generator: it's fine as a fallback
+<<<<<<< HEAD
+                result = generate_commit_message(prompt, self.gemini_key)
+=======
                 result = generate_commit_message(prompt, self.anthropic_key)
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
                 if result.get("success"):
                     desc = result.get("message", "")
                     self.root.after(0, lambda: desc_var.set(desc))
@@ -575,11 +611,19 @@ class GitHubAutomatorApp:
 
     def _ai_generate_message(self):
         """Generate commit message using AI."""
+<<<<<<< HEAD
+        if not self.gemini_key:
+            messagebox.showwarning(
+                "AI Feature Unavailable",
+                "Gemini API key not found.\n\n"
+                "Set GEMINI_API_KEY environment variable to enable this feature."
+=======
         if not self.anthropic_key:
             messagebox.showwarning(
                 "AI Feature Unavailable",
                 "Anthropic API key not found.\n\n"
                 "Set ANTHROPIC_API_KEY environment variable to enable this feature."
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
             )
             return
 
@@ -610,7 +654,11 @@ class GitHubAutomatorApp:
                     self.root.after(0, lambda: self._set_status("Ready"))
                     return
 
+<<<<<<< HEAD
+                result = generate_commit_message(combined_diff[:4000], self.gemini_key)
+=======
                 result = generate_commit_message(combined_diff[:4000], self.anthropic_key)
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 
                 if result["success"]:
                     self.root.after(0, lambda: self._show_ai_message_dialog(result["message"]))

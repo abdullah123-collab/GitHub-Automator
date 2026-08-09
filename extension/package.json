@@ -1,6 +1,10 @@
 {
   "name": "github-automator",
   "displayName": "GitHub Automator",
+<<<<<<< HEAD
+  "publisher": "abdullah",
+=======
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
   "description": "Automate GitHub workflows from VS Code",
   "version": "0.2.0",
   "engines": { "vscode": "^1.85.0" },
@@ -61,11 +65,14 @@
         "command": "github-automator.aiGenerate",
         "title": "GitHub Automator: ✨ AI Generate Commit Message",
         "icon": "$(sparkle)"
+<<<<<<< HEAD
+=======
       },
       {
         "command": "github-automator.setAnthropicKey",
         "title": "GitHub Automator: Set Anthropic API Key",
         "icon": "$(key)"
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
       }
     ],
     "menus": {
@@ -151,10 +158,17 @@
           "default": true,
           "description": "Always move the active repository to the top of the list."
         },
+<<<<<<< HEAD
+        "github-automator.geminiModel": {
+          "type": "string",
+          "default": "gemini-3.6-flash",
+          "description": "Gemini model to use for AI commit messages."
+=======
         "github-automator.anthropicModel": {
           "type": "string",
           "default": "claude-3-5-haiku-latest",
           "description": "Anthropic Claude model to use for AI commit messages."
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
         }
       }
     }

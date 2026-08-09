@@ -57,7 +57,16 @@ def list_repos(api: GitHubAPI, workspace_path: str = None, page: int = 1) -> dic
     start = time.time()
     try:
         from services.repo_registry import get_all_cloned_repos
+<<<<<<< HEAD
+        
+        api_start = time.time()
         repos = api.list_repos_page(per_page=100, page=page)
+        api_time = time.time() - api_start
+        
+        fs_start = time.time()
+=======
+        repos = api.list_repos_page(per_page=100, page=page)
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
         cloned_set = get_all_cloned_repos(workspace_path)
         
         from services.repo_registry import load_registry
@@ -71,6 +80,10 @@ def list_repos(api: GitHubAPI, workspace_path: str = None, page: int = 1) -> dic
             path = info.get("path")
             if owner and repo and path:
                 cloned_paths[f"{owner.lower()}/{repo.lower()}"] = path
+<<<<<<< HEAD
+        fs_time = time.time() - fs_start
+=======
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
                 
         def get_local_branch(repo_path):
             import subprocess
@@ -100,7 +113,15 @@ def list_repos(api: GitHubAPI, workspace_path: str = None, page: int = 1) -> dic
             for r in repos
         ]
         import sys
+<<<<<<< HEAD
+        print(f"\n--- SAFE TIMING REPORT ---", file=sys.stderr)
+        print(f"GitHub API Call: {api_time*1000:.2f} ms", file=sys.stderr)
+        print(f"Filesystem / Registry: {fs_time*1000:.2f} ms", file=sys.stderr)
+        print(f"Total list_repos execution: {(time.time() - start)*1000:.2f} ms\n", file=sys.stderr)
+        
+=======
         print(f"list_repos page {page} took {time.time() - start:.4f}s", file=sys.stderr)
+>>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
         return {"success": True, "repos": simplified, "has_more": len(repos) == 100}
     except Exception as e:
         return {"success": False, "error": str(e)}
