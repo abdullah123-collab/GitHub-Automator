@@ -5,22 +5,14 @@ A powerful VS Code extension that automates GitHub workflows with AI-powered com
 - **GitHub Authentication** - Secure OAuth integration for GitHub API access
 - **Repository Management** - Clone, switch, and manage multiple local repositories
 - **Auto Commit & Push** - Automated commit creation and push with optional merge conflict detection
-<<<<<<< HEAD
 - **AI-Powered Commit Messages** - Generate intelligent, contextual commit messages using Gemini API
-=======
-- **AI-Powered Commit Messages** - Generate intelligent, contextual commit messages using Claude API
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 - **Merge Conflict Resolution** - Detect and guide resolution of merge conflicts
 - **Local Repository Support** - Full support for local repository workflows without cloud dependency
 
 ## Tech Stack
 - **Frontend**: JavaScript, VS Code Extension API
 - **Backend**: Python, GitHub API
-<<<<<<< HEAD
 - **AI Integration**: Google Gemini Gemini API
-=======
-- **AI Integration**: Anthropic Claude API
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 - **Build**: npm (Node.js)
 
 ## Installation
@@ -40,11 +32,7 @@ A powerful VS Code extension that automates GitHub workflows with AI-powered com
 3. Set up environment variables:
 ```bash
    cp .env.example .env
-<<<<<<< HEAD
    # Add your GitHub and Google Gemini API keys to .env
-=======
-   # Add your GitHub and Anthropic API keys to .env
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 ```
 4. Launch the extension:
    - Open the `extension/` folder in VS Code
@@ -64,11 +52,7 @@ A powerful VS Code extension that automates GitHub workflows with AI-powered com
 
 ### ✅ Phase 3 — Automation & AI
 - Auto commit and push workflow
-<<<<<<< HEAD
 - AI-generated commit messages via Gemini API
-=======
-- AI-generated commit messages via Claude API
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 - Auto-pull on push rejection
 - Merge conflict detection and abort
 
