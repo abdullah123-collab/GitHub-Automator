@@ -1,8 +1,10 @@
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
 let persistentPythonProcess = null;
 let messageIdCounter = 0;
+let spawnCallCount = 0;
 const pendingRequests = new Map();
 
 function detectPython() {
@@ -15,7 +17,8 @@ function detectPython() {
       const { spawnSync } = require('child_process');
       const result = spawnSync(candidate[0], candidate.slice(1).concat(['--version']), {
         encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true
       });
       if (result.status === 0 || result.error == null) {
         return candidate;
@@ -28,24 +31,42 @@ function detectPython() {
   return ['python'];
 }
 
-<<<<<<< HEAD
-console.error(`[DAEMON SPAWN] time=${Date.now()}`);
-
-=======
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 function getPersistentPythonProcess(backendRoot) {
   if (persistentPythonProcess) return persistentPythonProcess;
 
-  const pythonCommand = detectPython();
-  const daemonPath = path.join(backendRoot, 'daemon.py');
-  
-  persistentPythonProcess = spawn(pythonCommand[0], [...pythonCommand.slice(1), daemonPath], {
+  spawnCallCount++;
+  console.log(`[PYTHON BRIDGE] getPersistentPythonProcess() called (Call Count: ${spawnCallCount})`);
+  console.log(`[PYTHON BRIDGE] No existing persistent process. Spawning new process...`);
+
+  const isWin = process.platform === 'win32';
+  const daemonExePath = path.join(backendRoot, isWin ? 'daemon.exe' : 'daemon');
+  const useExe = fs.existsSync(daemonExePath);
+
+  let cmd;
+  let args;
+
+  if (useExe) {
+    console.log(`[PYTHON BRIDGE] Mode: Production. Spawning standalone daemon from ${daemonExePath}`);
+    console.log(`[PYTHON BRIDGE] CWD: ${backendRoot}`);
+    cmd = daemonExePath;
+    args = [];
+  } else {
+    const pythonCommand = detectPython();
+    const daemonPath = path.join(backendRoot, 'daemon.py');
+    console.log(`[PYTHON BRIDGE] Mode: Development. Spawning python daemon using ${pythonCommand[0]} and ${daemonPath}`);
+    console.log(`[PYTHON BRIDGE] CWD: ${backendRoot}`);
+    cmd = pythonCommand[0];
+    args = [...pythonCommand.slice(1), daemonPath];
+  }
+
+  persistentPythonProcess = spawn(cmd, args, {
     cwd: backendRoot,
     env: {
       ...process.env,
       PYTHONPATH: backendRoot ? `${backendRoot}${path.delimiter}${process.env.PYTHONPATH || ''}` : process.env.PYTHONPATH
     },
-    stdio: ['pipe', 'pipe', 'pipe']
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true
   });
 
   let buffer = '';
@@ -83,12 +104,9 @@ function getPersistentPythonProcess(backendRoot) {
     persistentPythonProcess = null;
     for (const [id, { reject }] of pendingRequests) {
       reject(new Error(`Python daemon exited with code ${code}`));
-<<<<<<< HEAD
-      console.error(`[DAEMON CLOSED] code=${code}, time=${Date.now()}`);
-=======
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
     }
     pendingRequests.clear();
+    console.error(`[DAEMON CLOSED] code=${code}, time=${Date.now()}`);
   });
 
   return persistentPythonProcess;
@@ -111,10 +129,6 @@ function runPythonScript(scriptPath, payload, backendRoot) {
 }
 
 module.exports = {
-<<<<<<< HEAD
   runPythonScript,
   getPersistentPythonProcess
-=======
-  runPythonScript
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 };
