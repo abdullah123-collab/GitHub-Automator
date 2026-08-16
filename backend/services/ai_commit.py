@@ -9,24 +9,16 @@ Provides:
 import re
 
 
-<<<<<<< HEAD
 def generate_commit_message(diff: str, api_key: str = "", model: str = "gemini-3.6-flash") -> dict:
     """
     Generate a commit message from a diff.
     If api_key is provided, uses Gemini API.
-=======
-def generate_commit_message(diff: str, api_key: str = "", model: str = "claude-3-5-haiku-latest") -> dict:
-    """
-    Generate a commit message from a diff.
-    If api_key is provided, uses Anthropic API.
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
     Otherwise, uses the local rule-based fallback.
     """
     if not diff.strip():
         return {"success": False, "error": "Empty diff"}
 
     try:
-<<<<<<< HEAD
         # Try Gemini API first if key is provided
         if api_key and api_key != "" and not api_key.startswith("demo"):
             result = _try_gemini(diff, api_key, model)
@@ -41,35 +33,17 @@ def generate_commit_message(diff: str, api_key: str = "", model: str = "claude-3
             return {"success": False, "error": f"AI Generation Failed ({error_msg}). Please verify your connection and API key."}
             
         return {"success": False, "error": "AI Generation Failed: No valid GEMINI_API_KEY found in .env file."}
-=======
-        # Try Anthropic API first if key is provided
-        if api_key and api_key != "" and not api_key.startswith("demo"):
-            result = _try_anthropic(diff, api_key, model)
-            if result["success"]:
-                return result
-            # If API fails (credits etc), fall through to rule-based
-
-        # Rule-based generator (always free)
-        message = _rule_based_message(diff)
-        return {"success": True, "message": message}
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
-<<<<<<< HEAD
 def _try_gemini(diff: str, api_key: str, model: str) -> dict:
     """Try to use Gemini API for commit message."""
-=======
-def _try_anthropic(diff: str, api_key: str, model: str) -> dict:
-    """Try to use Anthropic API for commit message."""
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
     try:
         import urllib.request
         import json
 
-<<<<<<< HEAD
         prompt = f"Write a concise git commit message in Conventional Commits format for this diff. Only output the commit message, nothing else:\n\n{diff[:3000]}"
         payload = json.dumps({
             "contents": [{
@@ -83,39 +57,17 @@ def _try_anthropic(diff: str, api_key: str, model: str) -> dict:
             data=payload,
             headers={
                 "Content-Type": "application/json"
-=======
-        payload = json.dumps({
-            "model": model,
-            "max_tokens": 200,
-            "messages": [{
-                "role": "user",
-                "content": f"Write a concise git commit message in Conventional Commits format for this diff. Only output the commit message, nothing else:\n\n{diff[:3000]}"
-            }]
-        }).encode()
-
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=payload,
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json"
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
             }
         )
 
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
-<<<<<<< HEAD
             
             try:
                 message = data["candidates"][0]["content"]["parts"][0]["text"].strip()
             except (KeyError, IndexError):
                 return {"success": False, "error": "Invalid response format from Gemini API"}
                 
-=======
-            message = data["content"][0]["text"].strip()
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
             return {"success": True, "message": message}
 
     except Exception as e:

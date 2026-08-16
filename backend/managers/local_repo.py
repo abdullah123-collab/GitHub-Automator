@@ -9,7 +9,11 @@ Provides:
 
 import subprocess
 import os
+import sys
 from typing import Tuple, Dict
+
+# Hide CMD console window on Windows
+CREATION_FLAGS = 0x08000000 if sys.platform == 'win32' else 0
 
 
 def _run(cmd: list, cwd: str, timeout: int = 30) -> Tuple[bool, str]:
@@ -20,12 +24,15 @@ def _run(cmd: list, cwd: str, timeout: int = 30) -> Tuple[bool, str]:
             cwd=cwd,
             capture_output=True,
             text=True,
-            timeout=timeout
+            timeout=timeout,
+            creationflags=CREATION_FLAGS
         )
+        stdout = result.stdout.strip() if result.stdout else ""
+        stderr = result.stderr.strip() if result.stderr else ""
         if result.returncode == 0:
-            return True, result.stdout.strip()
+            return True, stdout
         else:
-            return False, result.stderr.strip() or result.stdout.strip()
+            return False, stderr or stdout
     except FileNotFoundError:
         return False, "git is not installed or not in PATH"
     except subprocess.TimeoutExpired:

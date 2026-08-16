@@ -17,9 +17,13 @@ Functions:
 
 import json
 import os
+import sys
 import subprocess
 from pathlib import Path
 from typing import Optional, Dict
+
+# Hide CMD console window on Windows
+CREATION_FLAGS = 0x08000000 if sys.platform == 'win32' else 0
 
 
 # Registry file location - stored in extension config directory
@@ -80,7 +84,8 @@ def is_valid_git_repo(repo_path: str) -> bool:
             cwd=repo_path,
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            creationflags=CREATION_FLAGS
         )
         return result.returncode == 0
     except Exception:
@@ -186,7 +191,8 @@ def _get_remote_url(repo_path: str) -> str:
             cwd=repo_path,
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            creationflags=CREATION_FLAGS
         )
         if result.returncode == 0:
             return result.stdout.strip()

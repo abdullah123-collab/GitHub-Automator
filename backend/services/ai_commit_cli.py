@@ -1,6 +1,5 @@
 import json
 import sys
-<<<<<<< HEAD
 import os
 from pathlib import Path
 
@@ -21,10 +20,6 @@ project_root = Path(__file__).resolve().parents[2]
 env_path = project_root / ".env"
 load_env_safely(env_path)
 
-=======
-from pathlib import Path
-
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 BACKEND_ROOT = str(Path(__file__).resolve().parents[1])
 if BACKEND_ROOT not in sys.path:
     sys.path.insert(0, BACKEND_ROOT)
@@ -35,13 +30,8 @@ from services.ai_commit import generate_commit_message
 if __name__ == "__main__":
     data = json.loads(sys.stdin.buffer.read().decode('utf-8'))
     diff = data.get("diff", "")
-<<<<<<< HEAD
     api_key = os.getenv("GEMINI_API_KEY", "")
     
     model = data.get("model", "gemini-3.6-flash")
-=======
-    api_key = data.get("api_key", "")
-    model = data.get("model", "claude-3-5-haiku-latest")
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
     result = generate_commit_message(diff, api_key, model)
     print(json.dumps(result))

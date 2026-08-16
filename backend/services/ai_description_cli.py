@@ -1,7 +1,6 @@
 import sys
 import json
 import os
-<<<<<<< HEAD
 from pathlib import Path
 
 def load_env_safely(env_path: Path):
@@ -19,15 +18,12 @@ def load_env_safely(env_path: Path):
 project_root = Path(__file__).resolve().parents[2]
 env_path = project_root / ".env"
 load_env_safely(env_path)
-=======
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 
 # Add backend directory to sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.ai_description import generate_description
 
-<<<<<<< HEAD
 def extract_repo_context(repo_path: str) -> str:
     """Extract lightweight context from an existing repository."""
     if not repo_path or not os.path.exists(repo_path):
@@ -92,12 +88,4 @@ if __name__ == "__main__":
     context_str = extract_repo_context(repo_path)
     
     result = generate_description(repo_name, api_key, context_str, model)
-=======
-if __name__ == "__main__":
-    args = json.loads(sys.stdin.buffer.read().decode('utf-8'))
-    repo_name = args.get("repo_name", "")
-    api_key = args.get("api_key", "")
-    
-    result = generate_description(repo_name, api_key)
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
     print(json.dumps(result))

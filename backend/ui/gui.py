@@ -19,9 +19,11 @@ import sys
 import json
 import threading
 import subprocess
+# Hide CMD console window on Windows
+CREATION_FLAGS = 0x08000000 if sys.platform == 'win32' else 0
+
 import tkinter as tk
 import os
-<<<<<<< HEAD
 from pathlib import Path
 
 # Load .env
@@ -39,8 +41,6 @@ try:
 except ImportError:
     pass
 
-=======
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 from tkinter import ttk, messagebox, simpledialog, filedialog, scrolledtext
 from services.github_api import GitHubAPI
 from services.ai_commit import generate_commit_message
@@ -76,14 +76,12 @@ def get_git_status(repo_path: str) -> dict:
     try:
         result = subprocess.run(
             ["git", "branch", "--show-current"],
-            cwd=repo_path, capture_output=True, text=True, timeout=5
-        )
+            cwd=repo_path, capture_output=True, text=True, timeout=5, creationflags=CREATION_FLAGS)
         branch = result.stdout.strip() or "detached"
 
         result = subprocess.run(
             ["git", "status", "--porcelain"],
-            cwd=repo_path, capture_output=True, text=True, timeout=5
-        )
+            cwd=repo_path, capture_output=True, text=True, timeout=5, creationflags=CREATION_FLAGS)
         changes = result.stdout.strip().split("\n") if result.stdout.strip() else []
         staged_count = sum(1 for line in changes if line.startswith(("M ", "A ", "D ", "R ")))
         unstaged_count = len(changes) - staged_count
@@ -106,8 +104,7 @@ def get_git_diff(repo_path: str, staged: bool = False) -> str:
         if staged:
             args.append("--staged")
         result = subprocess.run(
-            args, cwd=repo_path, capture_output=True, text=True, timeout=5
-        )
+            args, cwd=repo_path, capture_output=True, text=True, timeout=5, creationflags=CREATION_FLAGS)
         return result.stdout
     except Exception as e:
         return f"Error: {e}"
@@ -121,11 +118,7 @@ class GitHubAutomatorApp:
         self.repos = []
         self.local_repo_path = None
         self.repo_search_var = tk.StringVar(value="")
-<<<<<<< HEAD
         self.gemini_key = os.getenv("GEMINI_API_KEY", "")
-=======
-        self.anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
         self.status_var = tk.StringVar(value="Ready")
         self.scroll_frame = None
         self.canvas = None
@@ -207,11 +200,11 @@ class GitHubAutomatorApp:
         """Initialize a new Git repository."""
         def task():
             try:
-                subprocess.run(["git", "init"], cwd=folder, capture_output=True, timeout=5)
+                subprocess.run(["git", "init"], cwd=folder, capture_output=True, timeout=5, creationflags=CREATION_FLAGS)
                 subprocess.run(["git", "config", "user.name", "Automator"],
-                               cwd=folder, capture_output=True, timeout=5)
+                               cwd=folder, capture_output=True, timeout=5, creationflags=CREATION_FLAGS)
                 subprocess.run(["git", "config", "user.email", "automator@github.local"],
-                               cwd=folder, capture_output=True, timeout=5)
+                               cwd=folder, capture_output=True, timeout=5, creationflags=CREATION_FLAGS)
                 self.root.after(0, lambda: (
                     setattr(self, "local_repo_path", folder),
                     register_repo(folder),
@@ -233,7 +226,7 @@ class GitHubAutomatorApp:
         def task():
             try:
                 subprocess.run(["git", "clone", url, folder],
-                               capture_output=True, timeout=60)
+                               capture_output=True, timeout=60, creationflags=CREATION_FLAGS)
                 self.root.after(0, lambda: (
                     setattr(self, "local_repo_path", folder),
                     register_repo(folder),
@@ -413,11 +406,7 @@ class GitHubAutomatorApp:
 
     def _inline_generate_commit_message(self, text_widget):
         """Generate a commit message and insert it into the provided Text widget."""
-<<<<<<< HEAD
         if not self.gemini_key:
-=======
-        if not self.anthropic_key:
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
             # generate using rule-based fallback (generate_commit_message works without key)
             pass
 
@@ -436,8 +425,7 @@ class GitHubAutomatorApp:
 
                 untracked_result = subprocess.run(
                     ["git", "ls-files", "--others", "--exclude-standard"],
-                    cwd=self.local_repo_path, capture_output=True, text=True, timeout=5
-                )
+                    cwd=self.local_repo_path, capture_output=True, text=True, timeout=5, creationflags=CREATION_FLAGS)
                 untracked = untracked_result.stdout.strip()
 
                 combined_diff = ""
@@ -451,11 +439,7 @@ class GitHubAutomatorApp:
                 if not combined_diff.strip():
                     result = {"success": True, "message": "chore: update files"}
                 else:
-<<<<<<< HEAD
                     result = generate_commit_message(combined_diff[:4000], self.gemini_key)
-=======
-                    result = generate_commit_message(combined_diff[:4000], self.anthropic_key)
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 
                 def finish_ui():
                     self._stop_loading_border(text_widget)
@@ -504,11 +488,7 @@ class GitHubAutomatorApp:
             try:
                 prompt = "\n".join(prompt_parts) or "Create a short professional GitHub repository description."
                 # reuse generator: it's fine as a fallback
-<<<<<<< HEAD
                 result = generate_commit_message(prompt, self.gemini_key)
-=======
-                result = generate_commit_message(prompt, self.anthropic_key)
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
                 if result.get("success"):
                     desc = result.get("message", "")
                     self.root.after(0, lambda: desc_var.set(desc))
@@ -611,19 +591,11 @@ class GitHubAutomatorApp:
 
     def _ai_generate_message(self):
         """Generate commit message using AI."""
-<<<<<<< HEAD
         if not self.gemini_key:
             messagebox.showwarning(
                 "AI Feature Unavailable",
                 "Gemini API key not found.\n\n"
                 "Set GEMINI_API_KEY environment variable to enable this feature."
-=======
-        if not self.anthropic_key:
-            messagebox.showwarning(
-                "AI Feature Unavailable",
-                "Anthropic API key not found.\n\n"
-                "Set ANTHROPIC_API_KEY environment variable to enable this feature."
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
             )
             return
 
@@ -636,8 +608,7 @@ class GitHubAutomatorApp:
 
                 untracked_result = subprocess.run(
                     ["git", "ls-files", "--others", "--exclude-standard"],
-                    cwd=self.local_repo_path, capture_output=True, text=True, timeout=5
-                )
+                    cwd=self.local_repo_path, capture_output=True, text=True, timeout=5, creationflags=CREATION_FLAGS)
                 untracked = untracked_result.stdout.strip()
 
                 combined_diff = ""
@@ -654,11 +625,7 @@ class GitHubAutomatorApp:
                     self.root.after(0, lambda: self._set_status("Ready"))
                     return
 
-<<<<<<< HEAD
                 result = generate_commit_message(combined_diff[:4000], self.gemini_key)
-=======
-                result = generate_commit_message(combined_diff[:4000], self.anthropic_key)
->>>>>>> dcd6c22624dbf173ff929c5f133afb5303974d15
 
                 if result["success"]:
                     self.root.after(0, lambda: self._show_ai_message_dialog(result["message"]))
@@ -933,7 +900,8 @@ class GitHubAutomatorApp:
                 ["code", folder_path],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                shell=(os.name == 'nt')  # Windows pe shell=True zaroori hai
+                shell=(os.name == 'nt'),
+                creationflags=CREATION_FLAGS
             )
             self._set_status(f"📂 Opened in VS Code: {folder_path}")
         except FileNotFoundError:
@@ -981,8 +949,7 @@ class GitHubAutomatorApp:
                 try:
                     result = subprocess.run(
                         ["git", "remote", "get-url", "origin"],
-                        cwd=candidate, capture_output=True, text=True, timeout=5
-                    )
+                        cwd=candidate, capture_output=True, text=True, timeout=5, creationflags=CREATION_FLAGS)
                     remote = result.stdout.strip()
                     # repo_name URL mein match karo (token-injected URLs bhi handle honge)
                     if repo_name.lower() in remote.lower():
@@ -1013,8 +980,7 @@ class GitHubAutomatorApp:
                     auth_url = clone_url.replace("https://", f"https://{self.token}@")
                     result = subprocess.run(
                         ["git", "clone", auth_url, dest_path],
-                        capture_output=True, text=True, timeout=60
-                    )
+                        capture_output=True, text=True, timeout=60, creationflags=CREATION_FLAGS)
                     if result.returncode == 0:
                         self.root.after(0, lambda: self._set_status(f"✅ Cloned: {dest_path}"))
                         # Clone complete → VS Code mein open karo
@@ -1305,8 +1271,7 @@ class GitHubAutomatorApp:
                 auth_url = clone_url.replace("https://", f"https://{self.token}@")
                 result = subprocess.run(
                     ["git", "clone", auth_url, dest_path],
-                    capture_output=True, text=True, timeout=60
-                )
+                    capture_output=True, text=True, timeout=60, creationflags=CREATION_FLAGS)
                 if result.returncode == 0:
                     register_repo(dest_path)
                     self.root.after(0, lambda: self._set_status(f"✅ Cloned to {dest_path}"))
