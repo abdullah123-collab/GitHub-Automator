@@ -238,7 +238,7 @@ The smart check happens before cloning, so existing repositories open instantly!
 If you encounter issues:
 
 1. Check the registry file exists and is valid JSON
-2. Verify repository paths contain `.git` folders
+2. Verify repository pa ths contain `.git` folders
 3. Restart VS Code extension (reload window)
 4. Check extension console for error messages (View → Output → GitHub Automator)
 
