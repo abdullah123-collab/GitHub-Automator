@@ -31,3 +31,5 @@ Thumbs.db
 # Project-specific
 unused/
 *.log
+
+*.vsix
