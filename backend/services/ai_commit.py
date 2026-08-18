@@ -7,7 +7,7 @@ Provides:
 """
 
 import re
-
+from services.ai_gateway import generate_text
 
 def generate_commit_message(diff: str, api_key: str = "", model: str = "gemini-3.6-flash") -> dict:
     """
@@ -21,54 +21,32 @@ def generate_commit_message(diff: str, api_key: str = "", model: str = "gemini-3
     try:
         # Try Gemini API first if key is provided
         if api_key and api_key != "" and not api_key.startswith("demo"):
-            result = _try_gemini(diff, api_key, model)
+            prompt = f"Write a concise git commit message in Conventional Commits format for this diff. Only output the commit message, nothing else:\n\n{diff[:3000]}"
+            result = generate_text(prompt, api_key, model=model, max_tokens=150)
+            
             if result["success"]:
-                return result
+                return {"success": True, "message": result["text"].strip()}
+                
             # Sanitize error and do not fall through to rule-based fallback
             error_msg = result.get('error', 'Unknown error')
-            if '403' in error_msg or 'PERMISSION_DENIED' in error_msg:
-                return {"success": False, "error": "Invalid API Key or missing permissions. Please check your .env file."}
+            if 'timeouterror' in error_msg.lower():
+                return {"success": False, "error": "AI commit message generation timed out. Please try again."}
+            elif 'authenticationerror' in error_msg.lower():
+                return {"success": False, "error": "Invalid Gemini API Key or authorization error. Please check your .env file or VS Code settings."}
+            elif 'ratelimiterror' in error_msg.lower():
+                return {"success": False, "error": "Gemini API rate limit exceeded or quota exhausted. Please try again later."}
+            elif 'networkerror' in error_msg.lower():
+                return {"success": False, "error": "Network connection error. Please verify your internet connection."}
             elif '404' in error_msg or 'NOT_FOUND' in error_msg:
                 return {"success": False, "error": f"Invalid Gemini Model '{model}' selected. Please fix 'github-automator.geminiModel' in your VS Code settings."}
-            return {"success": False, "error": f"AI Generation Failed ({error_msg}). Please verify your connection and API key."}
+            else:
+                clean_err = error_msg
+                for prefix in ["Gemini API error: ", "AuthenticationError: ", "RateLimitError: ", "NetworkError: ", "TimeoutError: "]:
+                    if clean_err.startswith(prefix):
+                        clean_err = clean_err[len(prefix):]
+                return {"success": False, "error": f"AI Generation Failed: {clean_err}"}
             
         return {"success": False, "error": "AI Generation Failed: No valid GEMINI_API_KEY found in .env file."}
-
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-def _try_gemini(diff: str, api_key: str, model: str) -> dict:
-    """Try to use Gemini API for commit message."""
-    try:
-        import urllib.request
-        import json
-
-        prompt = f"Write a concise git commit message in Conventional Commits format for this diff. Only output the commit message, nothing else:\n\n{diff[:3000]}"
-        payload = json.dumps({
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }]
-        }).encode()
-
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        req = urllib.request.Request(
-            url,
-            data=payload,
-            headers={
-                "Content-Type": "application/json"
-            }
-        )
-
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-            
-            try:
-                message = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            except (KeyError, IndexError):
-                return {"success": False, "error": "Invalid response format from Gemini API"}
-                
-            return {"success": True, "message": message}
 
     except Exception as e:
         return {"success": False, "error": str(e)}

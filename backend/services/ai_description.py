@@ -37,11 +37,22 @@ def generate_description(repo_name: str, api_key: str, context_str: str = "", mo
                 return {"success": True, "description": desc}
                 
             error_msg = result.get('error', 'Unknown error')
-            if '403' in error_msg or 'PERMISSION_DENIED' in error_msg:
-                return {"success": False, "error": "Invalid API Key or missing permissions. Please check your .env file."}
+            if 'timeouterror' in error_msg.lower():
+                return {"success": False, "error": "AI description generation timed out. Please try again."}
+            elif 'authenticationerror' in error_msg.lower():
+                return {"success": False, "error": "Invalid Gemini API Key or authorization error. Please check your .env file or VS Code settings."}
+            elif 'ratelimiterror' in error_msg.lower():
+                return {"success": False, "error": "Gemini API rate limit exceeded or quota exhausted. Please try again later."}
+            elif 'networkerror' in error_msg.lower():
+                return {"success": False, "error": "Network connection error. Please verify your internet connection."}
             elif '404' in error_msg or 'NOT_FOUND' in error_msg:
                 return {"success": False, "error": "Invalid Gemini Model selected. Please fix 'github-automator.geminiModel' in your VS Code settings."}
-            return {"success": False, "error": f"AI Generation Failed ({error_msg}). Please verify your connection and API key."}
+            else:
+                clean_err = error_msg
+                for prefix in ["Gemini API error: ", "AuthenticationError: ", "RateLimitError: ", "NetworkError: ", "TimeoutError: "]:
+                    if clean_err.startswith(prefix):
+                        clean_err = clean_err[len(prefix):]
+                return {"success": False, "error": f"AI Generation Failed: {clean_err}"}
 
         return {"success": False, "error": "AI Generation Failed: No valid GEMINI_API_KEY found in .env file."}
 

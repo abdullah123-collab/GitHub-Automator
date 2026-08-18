@@ -817,11 +817,11 @@ class RepositoriesWebviewProvider {
           });
 
           function editDescription(repoName, owner, element) {
-            const currentDesc = element.innerText;
+            const currentDesc = element.innerText === 'No description provided.' ? '' : element.innerText;
             element.ondblclick = null;
-            element.innerHTML = '<div style="display: flex; gap: 4px; align-items: flex-start; width: 100%;">' +
-              '<textarea class="desc-edit-input" style="flex: 1; box-sizing: border-box; padding: 4px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-focusBorder); outline: none; border-radius: 2px; min-height: 60px; resize: vertical; font-family: inherit;">' + currentDesc.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</textarea>' +
-              '<button title="✨ Auto Generate Description" style="background: transparent; border: none; cursor: pointer; padding: 4px; color: var(--vscode-icon-foreground); display: flex; align-items: center; justify-content: center; margin-top: 2px;">' +
+            element.innerHTML = '<div style="display: flex; gap: 4px; align-items: flex-start; width: 100%; box-sizing: border-box; cursor: default;">' +
+              '<textarea class="desc-edit-input" style="flex: 1; box-sizing: border-box; padding: 4px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-focusBorder); outline: none; border-radius: 2px; min-height: 60px; max-height: 120px; resize: vertical; font-family: inherit; font-size: 12px; font-style: normal; width: 100%; min-width: 0;">' + currentDesc.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</textarea>' +
+              '<button title="✨ Auto Generate Description" style="background: transparent; border: none; cursor: pointer; padding: 4px; color: var(--vscode-icon-foreground); display: flex; align-items: center; justify-content: center; margin-top: 2px; flex-shrink: 0;">' +
               '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.158 13.844L12.784 5.22l-.707-.707-8.625 8.624.706.707zm7.575-8.544l2.122 2.122 1.414-1.414-2.121-2.122-1.415 1.414zM1.5 15.5l1.414 1.414 2.121-2.121L3.62 12.67 1.5 14.793v.707zM11 2.5a.5.5 0 0 1 .5-.5h2V0h1v2h2v1h-2v2h-1V3h-2a.5.5 0 0 1-.5-.5zm-4-1a.5.5 0 0 1 .5-.5h1V0h1v1h1v1H9v1H8V2H7a.5.5 0 0 1-.5-.5z"/></svg>' +
               '</button></div>';
             const input = element.querySelector('textarea');
@@ -842,12 +842,12 @@ class RepositoriesWebviewProvider {
               input.onblur = null;
               const newDesc = input.value;
               element.innerHTML = '<span style="color: var(--vscode-progressBar-background)">Saving...</span>';
-              element.dataset.original = currentDesc;
+              element.dataset.original = currentDesc || 'No description provided.';
               post('updateDescription', { repoName, owner, description: newDesc });
             };
             
             const cancel = () => {
-              element.innerHTML = currentDesc;
+              element.innerHTML = currentDesc || 'No description provided.';
               element.dataset.generating = 'false';
               element.ondblclick = function() { editDescription(repoName, owner, element); };
             };
@@ -910,7 +910,7 @@ class RepositoriesWebviewProvider {
               const element = document.getElementById('desc-' + message.payload.repoName);
               if (element) {
                 if (message.payload.success) {
-                  element.innerHTML = message.payload.description;
+                  element.innerHTML = message.payload.description || 'No description provided.';
                 } else {
                   element.innerHTML = element.dataset.original || 'No description provided.';
                 }
