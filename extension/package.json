@@ -49,6 +49,11 @@
         "title": "GitHub Automator: Clone Repository"
       },
       {
+        "command": "github-automator.publishFolder",
+        "title": "GitHub Automator: Publish Local Folder to GitHub",
+        "icon": "$(cloud-upload)"
+      },
+      {
         "command": "github-automator.initializeRepo",
         "title": "Initialize Repository Locally",
         "icon": "$(plus)"
@@ -66,6 +71,11 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "github-automator.publishFolder",
+          "when": "view == github-automator.repoView",
+          "group": "navigation@3"
+        },
         {
           "command": "github-automator.createRepo",
           "when": "view == github-automator.repoView",

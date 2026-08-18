@@ -30,9 +30,9 @@ from services.repo_registry import (
 )
 
 
-def create_repo(api: GitHubAPI, name: str, private: bool, description: str) -> dict:
+def create_repo(api: GitHubAPI, name: str, private: bool, description: str, auto_init: bool = True) -> dict:
     try:
-        result = api.create_repo(name, private, description)
+        result = api.create_repo(name, private, description, auto_init=auto_init)
         return {
             "success": True,
             "name": result.get("name"),
@@ -205,7 +205,23 @@ def smart_clone(repo_name: str, clone_url: str, dest_path: str, token: str) -> d
         "path": dest_path,
         "message": f"Repository '{repo_name}' cloned and registered"
     }
-
+def check_remote_repo_exists(api: GitHubAPI, name: str) -> dict:
+    """Check if a repository exists on GitHub for the authenticated user."""
+    try:
+        user = api.get_user()
+        owner = user.get("login")
+        api.get(f"/repos/{owner}/{name}")
+        return {"success": True, "exists": True, "owner": owner}
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {"success": True, "exists": False}
+        try:
+            body = json.loads(e.read().decode())
+            return {"success": False, "error": body.get("message", str(e))}
+        except Exception:
+            return {"success": False, "error": str(e)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 if __name__ == "__main__":
@@ -220,7 +236,8 @@ if __name__ == "__main__":
             api,
             name=args.get("name", ""),
             private=args.get("private", False),
-            description=args.get("description", "")
+            description=args.get("description", ""),
+            auto_init=args.get("auto_init", True)
         )
 
     elif action == "delete":
@@ -245,6 +262,12 @@ if __name__ == "__main__":
     elif action == "check_repo_exists":
         result = check_repo_exists(
             repo_name=args.get("repo_name", "")
+        )
+    
+    elif action == "check_remote_repo_exists":
+        result = check_remote_repo_exists(
+            api,
+            name=args.get("name", "")
         )
     
     elif action == "get_repo_path":

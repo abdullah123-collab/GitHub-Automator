@@ -7,7 +7,7 @@ from pathlib import Path
 # High confidence patterns
 PATTERNS = {
     "Private Key Block": re.compile(r"-----BEGIN [A-Z ]+ PRIVATE KEY-----"),
-    "Google API Key": re.compile(r"AIzaSy[A-Za-z0-9-_]{35}"),
+    "Google API Key": re.compile(r"AIzaSy[A-Za-z0-9-_]{33}"),
     "GitHub Classic PAT": re.compile(r"\bghp_[A-Za-z0-9_]{36}\b"),
     "GitHub Fine-grained PAT": re.compile(r"\bgithub_pat_[A-Za-z0-9_]{82}\b"),
     "AWS Access Key ID": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),

@@ -82,12 +82,12 @@ class GitHubAPI:
                 break
         return all_repos
 
-    def create_repo(self, name: str, private: bool = False, description: str = "") -> dict:
+    def create_repo(self, name: str, private: bool = False, description: str = "", auto_init: bool = True) -> dict:
         return self.post("/user/repos", {
             "name": name,
             "private": private,
             "description": description,
-            "auto_init": True
+            "auto_init": auto_init
         })
 
     def update_repo(self, owner: str, repo: str, data: dict) -> dict:

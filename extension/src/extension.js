@@ -1,6 +1,7 @@
 const vscode = require('vscode');
 const path = require('path');
 const { runPythonScript, getPersistentPythonProcess } = require('./pythonBridge');
+const { publishFolder } = require('./services/repositoryPublisher');
 
 const EXTENSION_NAME = 'GitHub Automator';
 const AUTH_SECRET_KEY = 'github-automator.token';
@@ -77,6 +78,9 @@ class RepositoriesWebviewProvider {
           break;
         case 'manageBranch':
           await manageBranchCommand(message.payload);
+          break;
+        case 'publishFolder':
+          await publishFolder(extensionContext, this);
           break;
         case 'popoverAction':
           await handlePopoverAction(message.payload);
@@ -3069,7 +3073,7 @@ async function showPanelCommand() {
     <head>
       <meta charset="UTF-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <style>body{font-family:var(--vscode-font-family);padding:16px;color:var(--vscode-foreground)} button{background:var(--vscode-button-background);color:var(--vscode-button-foreground);padding:8px 12px;border:0;border-radius:4px;margin-right:6px}</style>
+      <style>body{font-family:var(--vscode-font-family);padding:16px;color:var(--vscode-foreground)} button{background:var(--vscode-button-background);color:var(--vscode-button-foreground);padding:8px 12px;border:0;border-radius:4px;margin-right:6px;margin-bottom:6px}</style>
     </head>
     <body>
       <h2>GitHub Automator</h2>
@@ -3077,6 +3081,7 @@ async function showPanelCommand() {
       <button onclick="vscode.postMessage({ command: 'authenticate' })">Authenticate</button>
       <button onclick="vscode.postMessage({ command: 'refreshRepos' })">Refresh</button>
       <button onclick="vscode.postMessage({ command: 'createRepo' })">Create Repo</button>
+      <button onclick="vscode.postMessage({ command: 'publishFolder' })">Publish Folder</button>
       <button onclick="vscode.postMessage({ command: 'commitAndPush' })">Commit & Push</button>
       <script>const vscode = acquireVsCodeApi();</script>
     </body>
@@ -3092,6 +3097,9 @@ async function showPanelCommand() {
         break;
       case 'createRepo':
         await createRepoCommand();
+        break;
+      case 'publishFolder':
+        await publishFolder(extensionContext, reposViewProvider);
         break;
       case 'commitAndPush':
         await commitAndPushCommand();
@@ -3161,6 +3169,7 @@ function activate(context) {
     vscode.commands.registerCommand('github-automator.refreshRepos', () => refreshReposCommand()),
     vscode.commands.registerCommand('github-automator.repoOptions', () => repoOptionsCommand()),
     vscode.commands.registerCommand('github-automator.createRepo', () => createRepoCommand()),
+    vscode.commands.registerCommand('github-automator.publishFolder', () => publishFolder(extensionContext, reposViewProvider)),
     vscode.commands.registerCommand('github-automator.deleteRepo', () => deleteRepoCommand()),
     vscode.commands.registerCommand('github-automator.cloneRepo', () => cloneRepoCommand()),
     vscode.commands.registerCommand('github-automator.initializeRepo', () => initializeRepoCommand()),
