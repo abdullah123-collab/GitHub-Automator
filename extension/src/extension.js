@@ -3065,6 +3065,100 @@ async function aiGenerateCommand() {
   }
 }
 
+async function generateReadmeCommand() {
+  try {
+    const repoPath = getWorkspacePath();
+    if (!repoPath) {
+      await vscode.window.showWarningMessage('Open a folder before generating a README.');
+      return;
+    }
+
+    const { detectReadme, generateReadme, writeReadme } = require('./services/readmeGenerator');
+    const { analyzeProject } = require('./services/projectAnalyzer');
+    const { scanProject } = require('./services/securityScanner');
+
+    const readmeResult = await detectReadme(repoPath);
+    if (readmeResult.exists) {
+      const choice = await vscode.window.showWarningMessage(
+        `A README file (${readmeResult.filename}) already exists. Overwrite it?`,
+        { modal: true },
+        'Overwrite', 'Cancel'
+      );
+      if (choice !== 'Overwrite') {
+        return;
+      }
+    }
+
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: "Generating README.md with AI",
+      cancellable: false
+    }, async (progress) => {
+      
+      const report = (message) => progress.report({ message });
+
+      report("Analyzing project contents...");
+      const projectContext = await analyzeProject(repoPath);
+      if (!projectContext || !projectContext.success) {
+        throw new Error(projectContext ? projectContext.error : "Project analysis failed.");
+      }
+
+      report("Running security scan...");
+      const scanResult = await scanProject(repoPath);
+      if (!scanResult || !scanResult.success) {
+        throw new Error(scanResult ? scanResult.error : "Security scan failed.");
+      }
+
+      if (!scanResult.clean) {
+        let warningLines = [];
+        if (scanResult.suspicious_files && scanResult.suspicious_files.length) {
+            warningLines.push("Suspicious files:");
+            scanResult.suspicious_files.forEach(f => warningLines.push(`  - ${f.file} (${f.reason})`));
+        }
+        if (scanResult.found_secrets && scanResult.found_secrets.length) {
+            warningLines.push("Potential secrets found:");
+            scanResult.found_secrets.forEach(s => warningLines.push(`  - ${s.file}: L${s.line} (${s.type})`));
+        }
+        
+        const details = warningLines.join('\n');
+        vscode.window.showWarningMessage(`Security Alert: Secrets/Sensitive files detected!\n${details}`);
+
+        const proceedChoice = await vscode.window.showWarningMessage(
+          "Sensitive files or API keys were detected in the project. Proceed with generating and saving README?",
+          { modal: true },
+          "Proceed Anyway", "Cancel"
+        );
+        if (proceedChoice !== "Proceed Anyway") {
+          return;
+        }
+      }
+
+      report("Calling Gemini API to generate README.md...");
+      const config = vscode.workspace.getConfiguration('github-automator');
+      const geminiModel = config.get('geminiModel', 'gemini-3.6-flash');
+
+      const readmeGen = await generateReadme(repoPath, path.basename(repoPath), projectContext, geminiModel);
+      if (!readmeGen || !readmeGen.success) {
+        throw new Error(readmeGen ? readmeGen.error : "AI README generation failed.");
+      }
+
+      report("Saving README.md...");
+      const writeResult = await writeReadme(repoPath, readmeGen.text);
+      if (!writeResult.success) {
+        throw new Error(`Failed to save README.md: ${writeResult.error}`);
+      }
+
+      vscode.window.showInformationMessage("AI README.md generated and saved successfully!");
+
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(path.join(repoPath, 'README.md')));
+      await vscode.window.showTextDocument(doc);
+    });
+
+  } catch (error) {
+    vscode.window.showErrorMessage(`README generation failed: ${error && error.message ? error.message : String(error)}`);
+  }
+}
+
 
 async function showPanelCommand() {
   const panel = vscode.window.createWebviewPanel('githubAutomatorPanel', 'GitHub Automator', vscode.ViewColumn.One, { enableScripts: true });
@@ -3174,7 +3268,8 @@ function activate(context) {
     vscode.commands.registerCommand('github-automator.cloneRepo', () => cloneRepoCommand()),
     vscode.commands.registerCommand('github-automator.initializeRepo', () => initializeRepoCommand()),
     vscode.commands.registerCommand('github-automator.commitAndPush', () => commitAndPushCommand()),
-    vscode.commands.registerCommand('github-automator.aiGenerate', () => aiGenerateCommand())
+    vscode.commands.registerCommand('github-automator.aiGenerate', () => aiGenerateCommand()),
+    vscode.commands.registerCommand('github-automator.generateReadme', () => generateReadmeCommand())
   ];
 
   context.subscriptions.push(...commands);

@@ -67,10 +67,20 @@
         "command": "github-automator.aiGenerate",
         "title": "GitHub Automator: ✨ AI Generate Commit Message",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "github-automator.generateReadme",
+        "title": "GitHub Automator: Generate AI README.md",
+        "icon": "$(markdown)"
       }
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "github-automator.generateReadme",
+          "when": "view == github-automator.repoView",
+          "group": "navigation@4"
+        },
         {
           "command": "github-automator.publishFolder",
           "when": "view == github-automator.repoView",
