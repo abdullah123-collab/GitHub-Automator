@@ -123,7 +123,10 @@ def find_repo_by_name(repo_name: str) -> Optional[str]:
 def register_repo(repo_name: str, repo_path: str, clone_url: str) -> Dict:
     """
     Register a newly cloned repository in the registry.
-    
+
+    When possible, extract and store owner/repo information so the system can reliably
+    map local repositories to GitHub "owner/repo" identifiers.
+
     Returns:
         {"success": bool, "message": str}
     """
@@ -132,14 +135,19 @@ def register_repo(repo_name: str, repo_path: str, clone_url: str) -> Dict:
             "success": False,
             "message": f"Path is not a valid git repository: {repo_path}"
         }
-    
+
     registry = load_registry()
+
+    owner, repo = _extract_owner_repo(clone_url)
+
     registry[repo_name] = {
         "path": repo_path,
         "clone_url": clone_url,
-        "registered_at": _get_timestamp()
+        "registered_at": _get_timestamp(),
+        "owner": owner if owner else None,
+        "repo": repo if repo else None
     }
-    
+
     save_registry(registry)
     return {
         "success": True,
@@ -200,8 +208,42 @@ def _get_remote_url(repo_path: str) -> str:
         pass
     return ""
 
+
+def _has_remote_tracking_branches(repo_path: str) -> bool:
+    """Return True if the repository has any remote-tracking branches (excluding origin/HEAD redirects).
+
+    This is a safer indicator that the repo was cloned (or at least has fetched from the remote)
+    rather than merely having a remote URL configured after a local git init.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "branch", "-r"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=CREATION_FLAGS
+        )
+        if result.returncode != 0:
+            return False
+
+        lines = [l.strip() for l in result.stdout.splitlines() if l.strip()]
+        # Exclude origin/HEAD -> origin/main style symbolic refs
+        branches = [l for l in lines if "->" not in l and not l.lower().startswith("origin/head")]
+        return len(branches) > 0
+    except Exception:
+        return False
+
+
 def get_all_cloned_repos(workspace_path: str = None) -> set:
-    """Returns a set of 'owner/repo' strings for all locally cloned repositories, caching results in the registry."""
+    """Returns a set of 'owner/repo' strings for all locally cloned repositories, caching results in the registry.
+
+    Improved logic:
+    - Prefer registry entries that already contain owner/repo metadata (explicitly registered clones).
+    - For discovered/local paths, only consider a repository "cloned" (map to owner/repo) when it both
+      has a remote.origin.url that points to GitHub AND has at least one remote-tracking branch. This
+      avoids labeling repos "cloned" when the user simply did `git init` and later added a remote URL.
+    """
     registry = load_registry()
     cloned_set = set()
     changed = False
@@ -211,27 +253,31 @@ def get_all_cloned_repos(workspace_path: str = None) -> set:
         repo_path = info.get("path")
         if not repo_path or not os.path.isdir(os.path.join(repo_path, ".git")):
             continue
-            
-        if "owner" in info:
-            owner = info.get("owner")
-            repo = info.get("repo")
-            if owner and repo:
-                cloned_set.add(f"{owner.lower()}/{repo.lower()}")
+
+        # If we already recorded owner/repo in registry (explicit registration), trust that
+        owner = info.get("owner")
+        repo = info.get("repo")
+        if owner and repo:
+            cloned_set.add(f"{owner.lower()}/{repo.lower()}")
         else:
             paths_to_check.append((repo_name, repo_path))
 
+    # Also check workspace path if provided and not already in registry
     if workspace_path and workspace_path not in [info.get("path") for info in registry.values() if info.get("path")]:
         paths_to_check.append((workspace_path, workspace_path))
 
     for repo_name, repo_path in paths_to_check:
         if not repo_path or not os.path.isdir(os.path.join(repo_path, ".git")):
             continue
+
         remote_url = _get_remote_url(repo_path)
         local_owner, local_repo = _extract_owner_repo(remote_url)
-        
-        if local_owner and local_repo:
+
+        # Only treat as a cloned GitHub repo if a remote URL maps to owner/repo AND there are remote-tracking branches
+        if local_owner and local_repo and _has_remote_tracking_branches(repo_path):
             cloned_set.add(f"{local_owner.lower()}/{local_repo.lower()}")
-            
+
+        # Update registry metadata for future faster checks (store owner/repo even if we don't mark cloned now)
         if repo_name:
             if repo_name not in registry:
                 registry[repo_name] = {"path": repo_path}
@@ -241,7 +287,7 @@ def get_all_cloned_repos(workspace_path: str = None) -> set:
 
     if changed:
         save_registry(registry)
-        
+
     return cloned_set
 
 def is_repo_cloned(owner: str, repo_name: str, workspace_path: str = None) -> bool:
