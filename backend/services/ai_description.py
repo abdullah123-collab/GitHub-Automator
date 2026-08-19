@@ -1,6 +1,28 @@
 import re
 from services.ai_gateway import generate_text
 
+def validate_description_content(desc: str) -> tuple[bool, str]:
+    if not desc or not desc.strip():
+        return False, "AI returned an empty description."
+    
+    desc_clean = desc.strip()
+    if len(desc_clean) < 10:
+        return False, "AI returned a description that is too short."
+        
+    desc_lower = desc_clean.lower()
+    placeholders = ["[insert", "todo", "tbd", "placeholder", "lorem ipsum"]
+    for ph in placeholders:
+        if ph in desc_lower:
+            return False, f"AI returned template/placeholder content containing '{ph}'."
+            
+    if desc_clean.startswith("#"):
+        return False, "AI returned a description containing a Markdown heading."
+        
+    if desc_clean.startswith("-") or desc_clean.startswith("*"):
+        return False, "AI returned a description formatted as a list."
+        
+    return True, ""
+
 def generate_description(repo_name: str, api_key: str, context_str: str = "", model: str = "gemini-3.6-flash") -> dict:
     """Generate a repository description."""
     if not repo_name.strip():
@@ -15,6 +37,8 @@ def generate_description(repo_name: str, api_key: str, context_str: str = "", mo
                     f"You are generating a short, professional, 1-sentence description for an existing GitHub repository named '{repo_name}'.\n"
                     f"Use the following project context to accurately describe the project's purpose and technologies.\n"
                     f"Do not make unsupported claims, and keep it concise (under 120 chars if possible).\n"
+                    f"CRITICAL: Do NOT use any placeholders like '[Insert ...]', 'TODO', 'TBD', or generic filler text.\n"
+                    f"If the context is insufficient, generate a conservative description from available evidence (do not invent features).\n"
                     f"Return ONLY the final description text, nothing else.\n"
                     f"\n--- PROJECT CONTEXT ---\n{context_str}\n-----------------------\n"
                 )
@@ -24,6 +48,7 @@ def generate_description(repo_name: str, api_key: str, context_str: str = "", mo
                     f"Analyze the repository name and infer the likely project type and purpose.\n"
                     f"Do NOT use generic phrases such as 'A modern repository for...'.\n"
                     f"Do NOT mention that the description was inferred or guess overly specific features.\n"
+                    f"CRITICAL: Do NOT use any placeholders like '[Insert ...]', 'TODO', 'TBD', or generic filler text.\n"
                     f"Return ONLY the description text, nothing else. Keep it under 120 chars.\n"
                 )
 
@@ -34,6 +59,11 @@ def generate_description(repo_name: str, api_key: str, context_str: str = "", mo
                 # Clean up any quotes AI might have added
                 if desc.startswith('"') and desc.endswith('"'):
                     desc = desc[1:-1]
+                
+                valid, err_msg = validate_description_content(desc)
+                if not valid:
+                    return {"success": False, "error": f"AI returned invalid description content: {err_msg}"}
+                
                 return {"success": True, "description": desc}
                 
             error_msg = result.get('error', 'Unknown error')

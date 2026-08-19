@@ -84,8 +84,28 @@ if __name__ == "__main__":
     model = args.get("model", "gemini-3.6-flash")
     
     repo_path = args.get("repo_path", "")
+    project_context = args.get("project_context", {})
     
-    context_str = extract_repo_context(repo_path)
-    
+    context_str = ""
+    if project_context:
+        context_parts = []
+        if project_context.get('name'):
+            context_parts.append(f"Project Name: {project_context.get('name')}")
+        if project_context.get('type'):
+            context_parts.append(f"Detected Project Type: {project_context.get('type')}")
+        if project_context.get('technologies'):
+            context_parts.append(f"Technologies Used: {', '.join(project_context.get('technologies', []))}")
+        if project_context.get('dependencies'):
+            context_parts.append(f"Dependencies: {', '.join(project_context.get('dependencies', []))}")
+        if project_context.get('database_info'):
+            context_parts.append(f"Database Info: {', '.join(project_context.get('database_info', []))}")
+        if project_context.get('configuration_info'):
+            context_parts.append(f"Configuration Parameters: {', '.join(project_context.get('configuration_info', []))}")
+        if project_context.get('directories'):
+            context_parts.append(f"Directory Structure: {', '.join(project_context.get('directories', []))}")
+        context_str = "\n".join(context_parts)
+    else:
+        context_str = extract_repo_context(repo_path)
+        
     result = generate_description(repo_name, api_key, context_str, model)
     print(json.dumps(result))
