@@ -410,6 +410,7 @@ class RepositoriesWebviewProvider {
 
           let popovers = [];
           let lastPayload = null;
+          let activeEditSession = null;
 
           function closeAllPopovers() {
             popovers.forEach(p => { p.element.remove(); });
@@ -821,11 +822,16 @@ class RepositoriesWebviewProvider {
           });
 
           function editDescription(repoName, owner, element) {
+            if (activeEditSession) {
+              if (activeEditSession.element === element) return;
+              activeEditSession.cancel();
+            }
+
             const currentDesc = element.innerText === 'No description provided.' ? '' : element.innerText;
             element.ondblclick = null;
             element.innerHTML = '<div style="display: flex; gap: 4px; align-items: flex-start; width: 100%; box-sizing: border-box; cursor: default;">' +
-              '<textarea class="desc-edit-input" style="flex: 1; box-sizing: border-box; padding: 4px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-focusBorder); outline: none; border-radius: 2px; min-height: 60px; max-height: 120px; resize: vertical; font-family: inherit; font-size: 12px; font-style: normal; width: 100%; min-width: 0;">' + currentDesc.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</textarea>' +
-              '<button title="✨ Auto Generate Description" style="background: transparent; border: none; cursor: pointer; padding: 4px; color: var(--vscode-icon-foreground); display: flex; align-items: center; justify-content: center; margin-top: 2px; flex-shrink: 0;">' +
+              '<textarea class="desc-edit-input" style="flex: 1; box-sizing: border-box; padding: 4px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-focusBorder); outline: none; border-radius: 2px; min-height: 24px; max-height: 120px; resize: vertical; font-family: inherit; font-size: 12px; font-style: normal; width: 100%; min-width: 0; height: auto;">' + currentDesc.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</textarea>' +
+              '<button title="✨ Auto Generate Description" style="background: transparent; border: none; cursor: pointer; padding: 4px; color: var(--vscode-icon-foreground); display: flex; align-items: center; justify-content: center; margin-top: 2px; flex-shrink: 0; width: auto;">' +
               '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.158 13.844L12.784 5.22l-.707-.707-8.625 8.624.706.707zm7.575-8.544l2.122 2.122 1.414-1.414-2.121-2.122-1.415 1.414zM1.5 15.5l1.414 1.414 2.121-2.121L3.62 12.67 1.5 14.793v.707zM11 2.5a.5.5 0 0 1 .5-.5h2V0h1v2h2v1h-2v2h-1V3h-2a.5.5 0 0 1-.5-.5zm-4-1a.5.5 0 0 1 .5-.5h1V0h1v1h1v1H9v1H8V2H7a.5.5 0 0 1-.5-.5z"/></svg>' +
               '</button></div>';
             const input = element.querySelector('textarea');
@@ -836,6 +842,7 @@ class RepositoriesWebviewProvider {
             button.onclick = (e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (element.dataset.generating === 'true') return;
               element.dataset.generating = 'true';
               input.disabled = true;
               button.innerHTML = '<span class="loading" style="width: 14px; height: 14px; display: inline-block; border-radius: 50%;"></span>';
@@ -847,6 +854,7 @@ class RepositoriesWebviewProvider {
               const newDesc = input.value;
               element.innerHTML = '<span style="color: var(--vscode-progressBar-background)">Saving...</span>';
               element.dataset.original = currentDesc || 'No description provided.';
+              activeEditSession = null;
               post('updateDescription', { repoName, owner, description: newDesc });
             };
             
@@ -854,7 +862,10 @@ class RepositoriesWebviewProvider {
               element.innerHTML = currentDesc || 'No description provided.';
               element.dataset.generating = 'false';
               element.ondblclick = function() { editDescription(repoName, owner, element); };
+              activeEditSession = null;
             };
+
+            activeEditSession = { element, cancel, save };
             
             input.onkeydown = (e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
@@ -899,7 +910,31 @@ class RepositoriesWebviewProvider {
             } else if (message.command === 'reposUpdated') {
               const grid = document.querySelector('.repo-grid');
               if (grid) {
-                grid.innerHTML = message.payload.html;
+                const activeEditInput = document.querySelector('.desc-edit-input');
+                if (activeEditInput) {
+                  const editingCard = activeEditInput.closest('.repo-card');
+                  const editingCardId = editingCard ? editingCard.id : null;
+                  
+                  const parser = new DOMParser();
+                  const doc = parser.parseFromString(message.payload.html, 'text/html');
+                  const newCards = doc.querySelectorAll('.repo-card');
+                  
+                  const currentCards = Array.from(grid.querySelectorAll('.repo-card'));
+                  
+                  grid.innerHTML = '';
+                  newCards.forEach(newCard => {
+                    if (editingCardId && newCard.id === editingCardId) {
+                      const oldCard = currentCards.find(c => c.id === editingCardId);
+                      if (oldCard) {
+                        grid.appendChild(oldCard);
+                        return;
+                      }
+                    }
+                    grid.appendChild(newCard);
+                  });
+                } else {
+                  grid.innerHTML = message.payload.html;
+                }
               } else {
                 const shell = document.querySelector('.shell');
                 if (shell) {
@@ -1645,6 +1680,8 @@ async function updateRepoDescription(repoName, owner, description) {
 
 async function autoGenerateExistingDescCommand(payload) {
   const { repoName, owner } = payload;
+  console.log('[Auto Description] Wand clicked');
+  console.log('[Auto Description] Generation started');
   try {
     const pathResult = await runBackendScript('managers/repo_manager.py', {
       action: 'check_repo_exists',
@@ -1656,36 +1693,69 @@ async function autoGenerateExistingDescCommand(payload) {
       repo_path = pathResult.path;
     }
 
+    let projectContext = null;
+    if (repo_path) {
+      const { analyzeProject } = require('./services/projectAnalyzer');
+      projectContext = await analyzeProject(repo_path);
+    }
+    console.log('[Auto Description] Project context collected');
+
     const config = vscode.workspace.getConfiguration('github-automator');
     const geminiModel = config.get('geminiModel', 'gemini-3.6-flash');
 
+    console.log('[Auto Description] Sending Gemini request');
     const generated = await runBackendScript('services/ai_description_cli.py', {
       repo_name: repoName,
       repo_path: repo_path,
-      model: geminiModel
+      model: geminiModel,
+      project_context: projectContext || {}
     });
 
     if (reposViewProvider && reposViewProvider.view) {
       if (!generated || !generated.success) {
         const err = generated ? generated.error : 'Failed to generate';
+        console.log(`[Auto Description] Generation failed: ${err}`);
         vscode.window.showErrorMessage(`Auto Description failed: ${err}`);
+        reposViewProvider.view.webview.postMessage({
+          command: 'descriptionGenerated',
+          payload: {
+            repoName,
+            success: false,
+            description: '',
+            error: err
+          }
+        });
+        return;
       }
+
+      console.log('[Auto Description] Gemini response received');
+      console.log('[Auto Description] Response parsed');
+      console.log('[Auto Description] Description update started');
+      
+      // Auto-save the description!
+      await updateRepoDescription(repoName, owner, generated.description);
+      
+      console.log('[Auto Description] Description update completed');
+      
+      // Also notify webview to restore editor button/input state
       reposViewProvider.view.webview.postMessage({
         command: 'descriptionGenerated',
         payload: {
           repoName,
-          success: generated && generated.success,
-          description: generated ? generated.description : '',
-          error: generated ? generated.error : 'Failed to generate'
+          success: true,
+          description: generated.description,
+          error: ''
         }
       });
     }
   } catch (error) {
-    vscode.window.showErrorMessage(`Auto Description failed: ${error && error.message ? error.message : String(error)}`);
+    const errMsg = error && error.message ? error.message : String(error);
+    console.log(`[Auto Description] Error: ${errMsg}`);
+    vscode.window.showErrorMessage(`Auto Description failed: ${errMsg}`);
     if (reposViewProvider && reposViewProvider.view) {
       reposViewProvider.view.webview.postMessage({
         command: 'descriptionGenerated',
-        payload: { repoName, success: false, error: error && error.message ? error.message : String(error) }
+        payload: { repoName, success: false, error: errMsg }
       });
     }
   }
@@ -3208,9 +3278,13 @@ async function showPanelCommand() {
 }
 
 function activate(context) {
+  const startTime = Date.now();
+  console.log('[GitHub Automator] activate() started');
+  
   extensionContext = context;
   outputChannel = createOutputChannel();
   context.subscriptions.push(outputChannel);
+  console.log(`[GitHub Automator] output channel created: ${Date.now() - startTime} ms`);
 
   // Automatically migrate legacy 'gemini-1.5-flash' setting to 'gemini-3.6-flash'
   try {
@@ -3223,14 +3297,16 @@ function activate(context) {
   } catch (e) {
     log(`Failed to migrate legacy geminiModel setting: ${e && e.message ? e.message : e}`);
   }
+  console.log(`[GitHub Automator] config migrated: ${Date.now() - startTime} ms`);
 
-  // Warm up the Python daemon in the background so it's ready before the user's first action
-  try {
-    getPersistentPythonProcess(getBackendRoot());
-  } catch (e) {
+  console.log('[GitHub Automator] Python bridge initialization started');
+  // Warm up the Python daemon asynchronously in the background so it's ready before the user's first action
+  getPersistentPythonProcess(getBackendRoot()).catch(e => {
     log(`Daemon warm-up failed: ${e && e.message ? e.message : e}`);
-  }
+  });
+  console.log(`[GitHub Automator] Python bridge initialization started (async): ${Date.now() - startTime} ms`);
 
+  console.log('[GitHub Automator] providers registered');
   reposViewProvider = new RepositoriesWebviewProvider(context);
   actionsViewProvider = new ActionsWebviewProvider(context);
 
@@ -3238,6 +3314,7 @@ function activate(context) {
     vscode.window.registerWebviewViewProvider('github-automator.repoView', reposViewProvider),
     vscode.window.registerWebviewViewProvider('github-automator.actionsView', actionsViewProvider)
   );
+  console.log(`[GitHub Automator] providers registered: ${Date.now() - startTime} ms`);
 
   function closeWebviewPopovers() {
     if (reposViewProvider && reposViewProvider.view) {
@@ -3256,6 +3333,7 @@ function activate(context) {
     })
   );
 
+  console.log('[GitHub Automator] commands registered');
   const commands = [
     vscode.commands.registerCommand('github-automator.authenticate', () => authenticateCommand()),
     vscode.commands.registerCommand('github-automator.logout', () => logoutCommand()),
@@ -3273,8 +3351,13 @@ function activate(context) {
   ];
 
   context.subscriptions.push(...commands);
-  updateAuthContext(false).catch(() => {});
+  console.log(`[GitHub Automator] commands registered: ${Date.now() - startTime} ms`);
 
+  console.log('[GitHub Automator] repository initialization started');
+  updateAuthContext(false).catch(() => {});
+  console.log(`[GitHub Automator] repository initialization started: ${Date.now() - startTime} ms`);
+
+  console.log(`[GitHub Automator] activation completed in ${Date.now() - startTime} ms`);
   return { extendContextMenu: undefined };
 }
 
