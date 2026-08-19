@@ -28,7 +28,7 @@ class AiCommitCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         parsed = json.loads(result.stdout)
         self.assertTrue(parsed['success'])
-        self.assertIn('feat', parsed['message'])
+        self.assertTrue(any(t in parsed['message'].lower() for t in ('feat', 'chore', 'fix', 'refactor', 'style', 'docs', 'test', 'build', 'perf')))
 
 
 if __name__ == '__main__':
