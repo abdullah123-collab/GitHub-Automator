@@ -96,8 +96,9 @@ class RepositoriesWebviewProvider {
     }
   }
 
-  setError(message) {
+  setError(message, errorType = '') {
     this.state.error = message || '';
+    this.state.errorType = errorType || '';
     this.update();
   }
 
@@ -217,15 +218,50 @@ class RepositoriesWebviewProvider {
       }
     }
 
+    const isNetworkError = state.errorType === 'network';
+    const isAuthError = state.errorType === 'auth';
+
+    let errorBannerHtml = '';
+    if (state.error) {
+      errorBannerHtml = `<div class="error-banner" style="padding: 8px 12px; margin-bottom: 8px; border-radius: 4px; background: rgba(244, 135, 113, 0.15); border: 1px solid var(--vscode-errorForeground, #f48771); color: var(--vscode-errorForeground, #f48771); font-size: 12px; display: flex; flex-direction: column; gap: 4px;">
+        <span style="font-weight: 600;">${state.error}</span>
+      </div>`;
+    }
+
+    if (displayRepos.length > 0) {
+      return `${errorBannerHtml}<div class="repo-grid">${displayRepos.map(repo => this.renderRepoCard(repo)).join('')}</div>`;
+    }
+
+    if (isNetworkError) {
+      return `
+        <div class="network-error-container" style="display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; padding: 20px 10px; text-align: center;">
+          <svg width="32" height="32" viewBox="0 0 16 16" fill="currentColor" style="color: var(--vscode-errorForeground, #f48771);"><path fill-rule="evenodd" clip-rule="evenodd" d="M8 3a5 5 0 0 0-4.667 3.195l.939.342A4 4 0 0 1 8 4a4 4 0 0 1 3.728 2.537l.939-.342A5 5 0 0 0 8 3zm0 3a2 2 0 0 0-1.83 1.196l.939.342c.184-.504.663-.838 1.191-.838s1.007.334 1.191.838l.939-.342A2 2 0 0 0 8 6zm0 3a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1zm-1.5.5a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0zm-1.5 0a3 3 0 1 1 6 0 3 3 0 0 1-6 0z"/></svg>
+          <div style="font-size: 13px; font-weight: 600; color: var(--vscode-errorForeground, #f48771);">No internet connection</div>
+          <div class="muted" style="font-size: 11px; margin-bottom: 5px;">Unable to connect to GitHub. Please check your internet connection.</div>
+          
+          <div id="offline-game-container" style="width: 100%; max-width: 280px; height: 120px; border: 1px solid var(--vscode-panel-border, #3c3c3c); background: #1e1e1e; position: relative; overflow: hidden; margin-top: 5px; border-radius: 4px; user-select: none;">
+            <canvas id="offlineGameCanvas" width="280" height="120" style="display: block; width: 100%; height: 100%;"></canvas>
+            <div id="game-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: flex; flex-direction: column; align-items: center; justify-content: center; color: white; font-family: inherit; font-size: 11px;">
+              <div style="font-weight: bold; font-size: 12px; margin-bottom: 6px;">Offline Runner</div>
+              <div>Click canvas or Press Space/Up to start & jump</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (isAuthError) {
+      return `${errorBannerHtml}<div class="muted" style="padding-top: 10px;">GitHub authentication/session error. Please connect again.</div>`;
+    }
+
     if (state.repos.length === 0) {
+      if (state.error) {
+        return `${errorBannerHtml}<div class="muted" style="padding-top: 10px;">Unable to load repositories.</div>`;
+      }
       return '<div class="muted" style="padding-top: 10px;">No repositories found.</div>';
     }
 
-    if (displayRepos.length === 0) {
-      return '<div class="muted" style="padding-top: 10px;">No repositories match the current filters.</div>';
-    }
-
-    return `<div class="repo-grid">${displayRepos.map(repo => this.renderRepoCard(repo)).join('')}</div>`;
+    return '<div class="muted" style="padding-top: 10px;">No repositories match the current filters.</div>';
   }
 
   getHtml() {
@@ -352,6 +388,19 @@ class RepositoriesWebviewProvider {
             background: var(--vscode-button-background, #0e639c) !important;
             color: var(--vscode-button-foreground, #ffffff) !important;
             outline: 1px solid var(--vscode-focusBorder, #007fd4) !important;
+          }
+          @keyframes desc-progress-anim {
+            0% { left: -100%; }
+            50% { left: 0%; }
+            100% { left: 100%; }
+          }
+          .desc-progress-line {
+            height: 100%;
+            width: 100%;
+            background: var(--vscode-progressBar-background, #007fd4);
+            position: absolute;
+            left: -100%;
+            animation: desc-progress-anim 1.5s infinite linear;
           }
         </style>
       </head>
@@ -829,57 +878,291 @@ class RepositoriesWebviewProvider {
 
             const currentDesc = element.innerText === 'No description provided.' ? '' : element.innerText;
             element.ondblclick = null;
-            element.innerHTML = '<div style="display: flex; gap: 4px; align-items: flex-start; width: 100%; box-sizing: border-box; cursor: default;">' +
-              '<textarea class="desc-edit-input" style="flex: 1; box-sizing: border-box; padding: 4px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-focusBorder); outline: none; border-radius: 2px; min-height: 24px; max-height: 120px; resize: vertical; font-family: inherit; font-size: 12px; font-style: normal; width: 100%; min-width: 0; height: auto;">' + currentDesc.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</textarea>' +
-              '<button title="✨ Auto Generate Description" style="background: transparent; border: none; cursor: pointer; padding: 4px; color: var(--vscode-icon-foreground); display: flex; align-items: center; justify-content: center; margin-top: 2px; flex-shrink: 0; width: auto;">' +
-              '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.158 13.844L12.784 5.22l-.707-.707-8.625 8.624.706.707zm7.575-8.544l2.122 2.122 1.414-1.414-2.121-2.122-1.415 1.414zM1.5 15.5l1.414 1.414 2.121-2.121L3.62 12.67 1.5 14.793v.707zM11 2.5a.5.5 0 0 1 .5-.5h2V0h1v2h2v1h-2v2h-1V3h-2a.5.5 0 0 1-.5-.5zm-4-1a.5.5 0 0 1 .5-.5h1V0h1v1h1v1H9v1H8V2H7a.5.5 0 0 1-.5-.5z"/></svg>' +
-              '</button></div>';
+            
+            element.innerHTML = 
+              '<div style="display: flex; flex-direction: column; width: 100%; box-sizing: border-box; cursor: default;">' +
+                '<div style="display: flex; gap: 4px; align-items: flex-start; width: 100%; box-sizing: border-box;">' +
+                  '<textarea class="desc-edit-input" style="flex: 1; box-sizing: border-box; padding: 4px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-focusBorder); outline: none; border-radius: 2px; min-height: 24px; max-height: 120px; resize: vertical; font-family: inherit; font-size: 12px; font-style: normal; width: 100%; min-width: 0; height: auto;">' + currentDesc.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</textarea>' +
+                  '<button title="✨ Auto Generate Description" style="background: transparent; border: none; cursor: pointer; padding: 4px; color: var(--vscode-icon-foreground); display: flex; align-items: center; justify-content: center; margin-top: 2px; flex-shrink: 0; width: auto;">' +
+                    '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.158 13.844L12.784 5.22l-.707-.707-8.625 8.624.706.707zm7.575-8.544l2.122 2.122 1.414-1.414-2.121-2.122-1.415 1.414zM1.5 15.5l1.414 1.414 2.121-2.121L3.62 12.67 1.5 14.793v.707zM11 2.5a.5.5 0 0 1 .5-.5h2V0h1v2h2v1h-2v2h-1V3h-2a.5.5 0 0 1-.5-.5zm-4-1a.5.5 0 0 1 .5-.5h1V0h1v1h1v1H9v1H8V2H7a.5.5 0 0 1-.5-.5z"/></svg>' +
+                  '</button>' +
+                '</div>' +
+                '<div class="desc-progress-container" style="height: 3px; width: 100%; background: var(--vscode-input-background, #1e1e1e); overflow: hidden; position: relative; border-radius: 2px; margin-top: 4px; display: none;">' +
+                  '<div class="desc-progress-line"></div>' +
+                '</div>' +
+                '<div class="desc-status-text" style="font-size: 11px; margin-top: 4px; min-height: 14px; display: none;"></div>' +
+              '</div>';
+
             const input = element.querySelector('textarea');
             const button = element.querySelector('button');
+            const progressContainer = element.querySelector('.desc-progress-container');
+            const statusText = element.querySelector('.desc-status-text');
+
             input.focus();
-            
+
+            const setEditorState = (newState, payload = {}) => {
+              if (!activeEditSession || activeEditSession.element !== element) return;
+              activeEditSession.state = newState;
+
+              if (newState === 'generating') {
+                input.disabled = true;
+                progressContainer.style.display = 'block';
+                statusText.style.display = 'block';
+                statusText.className = 'desc-status-text';
+                statusText.innerText = 'Generating description...';
+                statusText.style.color = 'var(--vscode-descriptionForeground)';
+                button.innerHTML = '<span class="loading" style="width: 14px; height: 14px; display: inline-block; border-radius: 50%;"></span>';
+              } 
+              else if (newState === 'generated/review') {
+                input.disabled = false;
+                progressContainer.style.display = 'none';
+                statusText.style.display = 'block';
+                statusText.className = 'desc-status-text modified';
+                statusText.innerText = 'Description has been modified';
+                statusText.style.color = 'var(--vscode-progressBar-background, #007fd4)';
+                button.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.158 13.844L12.784 5.22l-.707-.707-8.625 8.624.706.707zm7.575-8.544l2.122 2.122 1.414-1.414-2.121-2.122-1.415 1.414zM1.5 15.5l1.414 1.414 2.121-2.121L3.62 12.67 1.5 14.793v.707zM11 2.5a.5.5 0 0 1 .5-.5h2V0h1v2h2v1h-2v2h-1V3h-2a.5.5 0 0 1-.5-.5zm-4-1a.5.5 0 0 1 .5-.5h1V0h1v1h1v1H9v1H8V2H7a.5.5 0 0 1-.5-.5z"/></svg>';
+                input.focus();
+              } 
+              else if (newState === 'saving') {
+                input.disabled = true;
+                progressContainer.style.display = 'none';
+                statusText.style.display = 'block';
+                statusText.className = 'desc-status-text saving';
+                statusText.innerText = 'Saving...';
+                statusText.style.color = 'var(--vscode-descriptionForeground)';
+              } 
+              else if (newState === 'saved') {
+                input.disabled = true;
+                progressContainer.style.display = 'none';
+                statusText.style.display = 'block';
+                statusText.className = 'desc-status-text modified';
+                statusText.innerText = 'Description has been modified';
+                statusText.style.color = 'var(--vscode-progressBar-background, #007fd4)';
+              } 
+              else if (newState === 'error') {
+                input.disabled = false;
+                progressContainer.style.display = 'none';
+                statusText.style.display = 'block';
+                statusText.className = 'desc-status-text error';
+                statusText.innerText = payload.error || 'Failed to save description';
+                statusText.style.color = 'var(--vscode-errorForeground, #f48771)';
+                button.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.158 13.844L12.784 5.22l-.707-.707-8.625 8.624.706.707zm7.575-8.544l2.122 2.122 1.414-1.414-2.121-2.122-1.415 1.414zM1.5 15.5l1.414 1.414 2.121-2.121L3.62 12.67 1.5 14.793v.707zM11 2.5a.5.5 0 0 1 .5-.5h2V0h1v2h2v1h-2v2h-1V3h-2a.5.5 0 0 1-.5-.5zm-4-1a.5.5 0 0 1 .5-.5h1V0h1v1h1v1H9v1H8V2H7a.5.5 0 0 1-.5-.5z"/></svg>';
+                input.focus();
+              }
+            };
+
+            const triggerGeneration = () => {
+              setEditorState('generating');
+              post('autoGenerateExistingDesc', { repoName, owner });
+            };
+
+            const save = () => {
+              if (!activeEditSession || activeEditSession.element !== element) return;
+              if (activeEditSession.state === 'saving') return;
+              
+              const newDesc = input.value;
+              setEditorState('saving');
+              element.dataset.original = currentDesc || 'No description provided.';
+              post('updateDescription', { repoName, owner, description: newDesc });
+            };
+
+            const cancel = () => {
+              if (activeEditSession && activeEditSession.element === element) {
+                activeEditSession = null;
+              }
+              element.innerHTML = currentDesc || 'No description provided.';
+              element.dataset.generating = 'false';
+              element.ondblclick = function() { editDescription(repoName, owner, element); };
+            };
+
+            const handleGenerated = (payload) => {
+              if (payload.success) {
+                input.value = payload.description;
+                setEditorState('generated/review');
+              } else {
+                setEditorState('error', { error: payload.error || 'Generation failed' });
+              }
+            };
+
+            const handleUpdated = (payload) => {
+              if (payload.success) {
+                setEditorState('saved');
+                setTimeout(() => {
+                  if (activeEditSession && activeEditSession.element === element) {
+                    activeEditSession = null;
+                  }
+                  element.innerHTML = payload.description || 'No description provided.';
+                  element.ondblclick = function() { editDescription(repoName, owner, element); };
+                }, 1000);
+              } else {
+                setEditorState('error', { error: payload.error || 'Failed to update description' });
+              }
+            };
+
+            activeEditSession = {
+              element,
+              repoName,
+              owner,
+              state: 'idle',
+              cancel,
+              save,
+              handleGenerated,
+              handleUpdated
+            };
+
             button.onmousedown = (e) => e.preventDefault();
             button.onclick = (e) => {
               e.preventDefault();
               e.stopPropagation();
-              if (element.dataset.generating === 'true') return;
-              element.dataset.generating = 'true';
-              input.disabled = true;
-              button.innerHTML = '<span class="loading" style="width: 14px; height: 14px; display: inline-block; border-radius: 50%;"></span>';
-              post('autoGenerateExistingDesc', { repoName, owner });
-            };
-            
-            const save = () => {
-              input.onblur = null;
-              const newDesc = input.value;
-              element.innerHTML = '<span style="color: var(--vscode-progressBar-background)">Saving...</span>';
-              element.dataset.original = currentDesc || 'No description provided.';
-              activeEditSession = null;
-              post('updateDescription', { repoName, owner, description: newDesc });
-            };
-            
-            const cancel = () => {
-              element.innerHTML = currentDesc || 'No description provided.';
-              element.dataset.generating = 'false';
-              element.ondblclick = function() { editDescription(repoName, owner, element); };
-              activeEditSession = null;
+              if (activeEditSession.state === 'generating' || activeEditSession.state === 'saving') return;
+              triggerGeneration();
             };
 
-            activeEditSession = { element, cancel, save };
-            
             input.onkeydown = (e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
+                if (activeEditSession.state === 'generating' || activeEditSession.state === 'saving') {
+                  return;
+                }
                 save();
               }
-              if (e.key === 'Escape') cancel();
+              if (e.key === 'Escape') {
+                cancel();
+              }
             };
-            
+
             input.onblur = (e) => {
-              if (element.dataset.generating === 'true') return;
+              if (activeEditSession.state === 'generating' || activeEditSession.state === 'saving') return;
               if (e.relatedTarget === button || button.contains(e.relatedTarget)) return;
               cancel();
             };
+
+            triggerGeneration();
+          }
+
+          let gameInterval = null;
+          function initOfflineGame() {
+            const canvas = document.getElementById('offlineGameCanvas');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const overlay = document.getElementById('game-overlay');
+            
+            let gameRunning = false;
+            let score = 0;
+            let player = { x: 30, y: 100, width: 12, height: 16, vy: 0, gravity: 0.5, jumpStrength: -7.5, isGrounded: true };
+            let obstacles = [];
+            let frameCount = 0;
+            let gameSpeed = 2;
+            
+            function resetGame() {
+              score = 0;
+              player.y = 100;
+              player.vy = 0;
+              player.isGrounded = true;
+              obstacles = [];
+              frameCount = 0;
+              gameSpeed = 2;
+              gameRunning = true;
+              overlay.style.display = 'none';
+            }
+            
+            function jump() {
+              if (player.isGrounded) {
+                player.vy = player.jumpStrength;
+                player.isGrounded = false;
+              }
+            }
+            
+            function handleAction(e) {
+              if (!gameRunning) {
+                resetGame();
+                e.preventDefault();
+              } else {
+                jump();
+                e.preventDefault();
+              }
+            }
+            
+            canvas.addEventListener('click', handleAction);
+            
+            window.addEventListener('keydown', (e) => {
+              if (document.getElementById('offlineGameCanvas')) {
+                if (e.key === ' ' || e.key === 'ArrowUp') {
+                  if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
+                    return;
+                  }
+                  handleAction(e);
+                }
+              }
+            });
+            
+            function updateGame() {
+              if (!gameRunning) return;
+              frameCount++;
+              
+              player.vy += player.gravity;
+              player.y += player.vy;
+              if (player.y >= 100) {
+                player.y = 100;
+                player.vy = 0;
+                player.isGrounded = true;
+              }
+              
+              if (frameCount % 90 === 0) {
+                obstacles.push({ x: 280, y: 100, width: 10, height: 16 });
+              }
+              
+              for (let i = obstacles.length - 1; i >= 0; i--) {
+                obstacles[i].x -= gameSpeed;
+                
+                if (
+                  player.x < obstacles[i].x + obstacles[i].width &&
+                  player.x + player.width > obstacles[i].x &&
+                  player.y < obstacles[i].y + obstacles[i].height &&
+                  player.y + player.height > obstacles[i].y
+                ) {
+                  gameRunning = false;
+                  overlay.style.display = 'flex';
+                  overlay.innerHTML = '<div style="font-weight: bold; font-size: 13px; color: #f48771; margin-bottom: 6px;">Game Over</div>' +
+                                      '<div style="margin-bottom: 6px;">Score: ' + Math.floor(score) + '</div>' +
+                                      '<div>Click or Press Space to Restart</div>';
+                }
+                
+                if (obstacles[i].x + obstacles[i].width < 0) {
+                  obstacles.splice(i, 1);
+                  score += 10;
+                  if (score % 50 === 0) {
+                    gameSpeed += 0.5;
+                  }
+                }
+              }
+              
+              score += 0.1;
+              
+              ctx.clearRect(0, 0, 280, 120);
+              
+              ctx.strokeStyle = 'var(--vscode-panel-border, #3c3c3c)';
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.moveTo(0, 116);
+              ctx.lineTo(280, 116);
+              ctx.stroke();
+              
+              ctx.fillStyle = 'var(--vscode-progressBar-background, #007fd4)';
+              ctx.fillRect(player.x, player.y, player.width, player.height);
+              
+              ctx.fillStyle = 'var(--vscode-errorForeground, #f48771)';
+              for (const obs of obstacles) {
+                ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+              }
+              
+              ctx.fillStyle = 'var(--vscode-foreground, #cccccc)';
+              ctx.font = '10px sans-serif';
+              ctx.fillText('Score: ' + Math.floor(score), 10, 15);
+            }
+            
+            if (gameInterval) clearInterval(gameInterval);
+            gameInterval = setInterval(updateGame, 1000 / 60);
           }
 
            window.addEventListener('message', event => {
@@ -891,18 +1174,22 @@ class RepositoriesWebviewProvider {
               openRepoOptionsPopover(message.payload);
               window.focus();
             } else if (message.command === 'descriptionGenerated') {
-              const el = document.getElementById('desc-' + message.payload.repoName);
-              if (el) {
-                el.dataset.generating = 'false';
-                const input = el.querySelector('textarea');
-                const btn = el.querySelector('button');
-                if (input && btn) {
-                  input.disabled = false;
-                  if (message.payload.success) {
-                    input.value = message.payload.description;
+              if (activeEditSession && activeEditSession.repoName === message.payload.repoName) {
+                activeEditSession.handleGenerated(message.payload);
+              } else {
+                const el = document.getElementById('desc-' + message.payload.repoName);
+                if (el) {
+                  el.dataset.generating = 'false';
+                  const input = el.querySelector('textarea');
+                  const btn = el.querySelector('button');
+                  if (input && btn) {
+                    input.disabled = false;
+                    if (message.payload.success) {
+                      input.value = message.payload.description;
+                    }
+                    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.158 13.844L12.784 5.22l-.707-.707-8.625 8.624.706.707zm7.575-8.544l2.122 2.122 1.414-1.414-2.121-2.122-1.415 1.414zM1.5 15.5l1.414 1.414 2.121-2.121L3.62 12.67 1.5 14.793v.707zM11 2.5a.5.5 0 0 1 .5-.5h2V0h1v2h2v1h-2v2h-1V3h-2a.5.5 0 0 1-.5-.5zm-4-1a.5.5 0 0 1 .5-.5h1V0h1v1h1v1H9v1H8V2H7a.5.5 0 0 1-.5-.5z"/></svg>';
+                    input.focus();
                   }
-                  btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.158 13.844L12.784 5.22l-.707-.707-8.625 8.624.706.707zm7.575-8.544l2.122 2.122 1.414-1.414-2.121-2.122-1.415 1.414zM1.5 15.5l1.414 1.414 2.121-2.121L3.62 12.67 1.5 14.793v.707zM11 2.5a.5.5 0 0 1 .5-.5h2V0h1v2h2v1h-2v2h-1V3h-2a.5.5 0 0 1-.5-.5zm-4-1a.5.5 0 0 1 .5-.5h1V0h1v1h1v1H9v1H8V2H7a.5.5 0 0 1-.5-.5z"/></svg>';
-                  input.focus();
                 }
               }
             } else if (message.command === 'closePopovers') {
@@ -946,15 +1233,19 @@ class RepositoriesWebviewProvider {
                 }
               }
             } else if (message.command === 'descriptionUpdated') {
-              const element = document.getElementById('desc-' + message.payload.repoName);
-              if (element) {
-                if (message.payload.success) {
-                  element.innerHTML = message.payload.description || 'No description provided.';
-                } else {
-                  element.innerHTML = element.dataset.original || 'No description provided.';
+              if (activeEditSession && activeEditSession.repoName === message.payload.repoName) {
+                activeEditSession.handleUpdated(message.payload);
+              } else {
+                const element = document.getElementById('desc-' + message.payload.repoName);
+                if (element) {
+                  if (message.payload.success) {
+                    element.innerHTML = message.payload.description || 'No description provided.';
+                  } else {
+                    element.innerHTML = element.dataset.original || 'No description provided.';
+                  }
+                  const owner = element.getAttribute('data-owner');
+                  element.ondblclick = function() { editDescription(message.payload.repoName, owner, element); };
                 }
-                const owner = element.getAttribute('data-owner');
-                element.ondblclick = function() { editDescription(message.payload.repoName, owner, element); };
               }
             } else if (message.command === 'appendRepos') {
               const grid = document.querySelector('.repo-grid');
@@ -991,7 +1282,11 @@ class RepositoriesWebviewProvider {
             }
           });
 
+          // Initialize game if elements exist
+          initOfflineGame();
+
           document.addEventListener('DOMContentLoaded', () => {
+            initOfflineGame();
             const input = document.getElementById('repoSearch');
             if (!input) return;
             input.addEventListener('input', () => {
@@ -1320,14 +1615,22 @@ async function refreshReposCommand() {
       console.timeEnd(`repo_manager-list-page-${page}`);
 
       if (!result || !result.success) {
+        const errType = result && result.error_type ? result.error_type : 'api';
+        const errMsg = result && result.error ? result.error : 'Unable to load repositories';
         if (page === 1) {
-          reposViewProvider.setError(result && result.error ? result.error : 'Unable to load repositories');
+          reposViewProvider.setError(errMsg, errType);
+          if (errType === 'auth') {
+            reposViewProvider.setRepos([]);
+            reposViewProvider.setAuthenticated(false);
+            actionsViewProvider.setAuthenticated(false);
+            await updateAuthContext(false);
+          }
           reposViewProvider.setLoading(false);
           console.timeEnd('refreshReposCommand');
           isRefreshing = false;
           return;
         } else {
-          log(`Failed to load page ${page}: ${result && result.error ? result.error : 'Unknown error'}`);
+          log(`Failed to load page ${page}: ${errMsg}`);
           break;
         }
       }
@@ -1335,7 +1638,7 @@ async function refreshReposCommand() {
       allRepos = allRepos.concat(result.repos || []);
       
       if (page === 1) {
-        reposViewProvider.setError('');
+        reposViewProvider.setError('', '');
         reposViewProvider.setRepos(allRepos);
         actionsViewProvider.setAuthenticated(true);
         await updateAuthContext(true);
@@ -1350,7 +1653,19 @@ async function refreshReposCommand() {
 
   } catch (error) {
     log(`refreshRepos failed: ${error && error.message ? error.message : error}`);
-    reposViewProvider.setError(error && error.message ? error.message : 'Unable to refresh repositories');
+    const errMsg = error && error.message ? error.message : String(error);
+    let errType = 'unknown';
+    const network_keywords = ["timeout", "dns", "connection", "unreachable", "getaddrinfo", "host", "socket", "network", "internet", "offline"];
+    if (network_keywords.some(kw => errMsg.toLowerCase().includes(kw))) {
+      errType = 'network';
+    }
+    reposViewProvider.setError(errMsg, errType);
+    if (errType === 'auth') {
+      reposViewProvider.setRepos([]);
+      reposViewProvider.setAuthenticated(false);
+      actionsViewProvider.setAuthenticated(false);
+      await updateAuthContext(false);
+    }
     reposViewProvider.setLoading(false);
   }
   console.timeEnd('refreshReposCommand');
@@ -1729,13 +2044,7 @@ async function autoGenerateExistingDescCommand(payload) {
       }
 
       console.log('[Auto Description] Gemini response received');
-      console.log('[Auto Description] Response parsed');
-      console.log('[Auto Description] Description update started');
-      
-      // Auto-save the description!
-      await updateRepoDescription(repoName, owner, generated.description);
-      
-      console.log('[Auto Description] Description update completed');
+      // Do NOT auto-save the description here anymore!
       
       // Also notify webview to restore editor button/input state
       reposViewProvider.view.webview.postMessage({

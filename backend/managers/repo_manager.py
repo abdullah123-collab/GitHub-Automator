@@ -122,8 +122,24 @@ def list_repos(api: GitHubAPI, workspace_path: str = None, page: int = 1) -> dic
         print(f"Total list_repos execution: {(time.time() - start)*1000:.2f} ms\n", file=sys.stderr)
         
         return {"success": True, "repos": simplified, "has_more": len(repos) == 100}
+    except urllib.error.HTTPError as e:
+        try:
+            body = json.loads(e.read().decode())
+            err_msg = body.get("message", str(e))
+        except Exception:
+            err_msg = str(e)
+        if e.code in (401, 403):
+            return {"success": False, "error": f"Authentication failure: {err_msg}", "error_type": "auth"}
+        else:
+            return {"success": False, "error": f"GitHub API error: {err_msg}", "error_type": "api"}
+    except urllib.error.URLError as e:
+        return {"success": False, "error": "No internet connection", "error_type": "network"}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        err_str = str(e)
+        network_keywords = ["timeout", "dns", "connection", "unreachable", "getaddrinfo", "host", "socket"]
+        if any(kw in err_str.lower() for kw in network_keywords):
+            return {"success": False, "error": "No internet connection", "error_type": "network"}
+        return {"success": False, "error": err_str, "error_type": "unknown"}
 
 
 def clone_repo(clone_url: str, dest_path: str, token: str) -> dict:
