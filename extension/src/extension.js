@@ -1036,8 +1036,6 @@ class RepositoriesWebviewProvider {
               if (e.relatedTarget === button || button.contains(e.relatedTarget)) return;
               cancel();
             };
-
-            triggerGeneration();
           }
 
           let gameInterval = null;
