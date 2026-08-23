@@ -1,7 +1,11 @@
 const vscode = require('vscode');
 const path = require('path');
+const os = require('os');
+const fs = require('fs');
 const { runPythonScript, getPersistentPythonProcess } = require('./pythonBridge');
 const { publishFolder } = require('./services/repositoryPublisher');
+const { ReadmeCodeLensProvider } = require('./readmeCodeLensProvider');
+const { parseSections, matchSections, reassembleDocument } = require('./readmeSectionParser');
 
 const EXTENSION_NAME = 'GitHub Automator';
 const AUTH_SECRET_KEY = 'github-automator.token';
@@ -10,6 +14,8 @@ let outputChannel;
 let extensionContext;
 let reposViewProvider;
 let actionsViewProvider;
+let readmeCodeLensProvider;
+const activeReadmeSessions = new Map();
 
 class RepositoriesWebviewProvider {
   constructor(context) {
@@ -3442,99 +3448,292 @@ async function aiGenerateCommand() {
   }
 }
 
-async function generateReadmeCommand() {
+async function generateReadmeCommand(uri) {
+  let readmeUri = uri;
+  if (!readmeUri && vscode.window.activeTextEditor) {
+    const doc = vscode.window.activeTextEditor.document;
+    if (path.basename(doc.fileName).toLowerCase() === 'readme.md') {
+      readmeUri = doc.uri;
+    }
+  }
+
+  if (!readmeUri) {
+    await vscode.window.showWarningMessage('Please open a README.md file first.');
+    return;
+  }
+
+  const activeSession = activeReadmeSessions.get(readmeUri.toString());
+  if (activeSession && activeSession.status === 'generating') {
+    return;
+  }
+
+  const repoPath = path.dirname(readmeUri.fsPath);
+  
+  const { getRepoInfo } = require('./services/gitService');
+  let repoInfo;
   try {
-    const repoPath = getWorkspacePath();
-    if (!repoPath) {
-      await vscode.window.showWarningMessage('Open a folder before generating a README.');
+    repoInfo = await getRepoInfo(repoPath);
+  } catch (err) {
+    repoInfo = null;
+  }
+  if (!repoInfo || !repoInfo.is_git_repo) {
+    await vscode.window.showWarningMessage('The README.md must be located at the root of a Git repository.');
+    return;
+  }
+
+  if (readmeCodeLensProvider) {
+    readmeCodeLensProvider.setState(readmeUri, 'generating');
+  }
+
+  const sessionId = Date.now().toString() + Math.random().toString(36).substring(2, 5);
+  
+  let document;
+  try {
+    document = await vscode.workspace.openTextDocument(readmeUri);
+  } catch (err) {
+    if (readmeCodeLensProvider) {
+      readmeCodeLensProvider.setState(readmeUri, 'error');
+    }
+    return;
+  }
+
+  const initialVersion = document.version;
+  const initialText = document.getText();
+
+  const session = {
+    sessionId,
+    documentUri: readmeUri,
+    repoPath,
+    initialDocumentVersion: initialVersion,
+    initialContent: initialText,
+    status: 'generating',
+    isApplyingOwnEdit: false,
+    finalContent: ''
+  };
+
+  activeReadmeSessions.set(readmeUri.toString(), session);
+  if (readmeCodeLensProvider) {
+    readmeCodeLensProvider.fire();
+  }
+
+  await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification,
+    title: "Generating README.md suggestions with AI...",
+    cancellable: false
+  }, async () => {
+    const scriptPath = path.join(getBackendRoot(), 'managers/readme_manager.py');
+    const config = vscode.workspace.getConfiguration('github-automator');
+    const geminiModel = config.get('geminiModel', 'gemini-3.6-flash');
+
+    let backendResult;
+    try {
+      backendResult = await runPythonScript(scriptPath, {
+        repo_path: repoPath,
+        existing_content: initialText,
+        model: geminiModel
+      }, getBackendRoot());
+    } catch (err) {
+      backendResult = { success: false, error: err.message, error_type: 'unknown' };
+    }
+
+    let currentDoc;
+    try {
+      currentDoc = await vscode.workspace.openTextDocument(readmeUri);
+    } catch (e) {
+      currentDoc = null;
+    }
+
+    if (!currentDoc || currentDoc.version !== initialVersion || currentDoc.getText() !== initialText) {
+      if (readmeCodeLensProvider) {
+        readmeCodeLensProvider.setState(readmeUri, 'error');
+      }
+      activeReadmeSessions.delete(readmeUri.toString());
+      vscode.window.showWarningMessage('README changed while AI was generating. Generate again to ensure the suggestion uses the latest content.');
       return;
     }
 
-    const { detectReadme, generateReadme, writeReadme } = require('./services/readmeGenerator');
-    const { analyzeProject } = require('./services/projectAnalyzer');
-    const { scanProject } = require('./services/securityScanner');
-
-    const readmeResult = await detectReadme(repoPath);
-    if (readmeResult.exists) {
-      const choice = await vscode.window.showWarningMessage(
-        `A README file (${readmeResult.filename}) already exists. Overwrite it?`,
-        { modal: true },
-        'Overwrite', 'Cancel'
-      );
-      if (choice !== 'Overwrite') {
-        return;
+    if (!backendResult || !backendResult.success) {
+      if (readmeCodeLensProvider) {
+        readmeCodeLensProvider.setState(readmeUri, 'error');
       }
+      session.status = 'error';
+      if (readmeCodeLensProvider) {
+        readmeCodeLensProvider.fire();
+      }
+
+      let errMsg = 'README generation failed.';
+      if (backendResult) {
+        const errType = backendResult.error_type;
+        const errSource = backendResult.error_source;
+
+        if (errType === 'network') {
+          errMsg = 'No internet connection. Please check your connection and try again.';
+        } else if (errType === 'auth') {
+          if (errSource === 'github') {
+            errMsg = 'GitHub authentication/session error. Please check your GitHub token.';
+          } else if (errSource === 'gemini') {
+            errMsg = 'AI authentication failed. Please check your Gemini API configuration.';
+          } else {
+            errMsg = 'Authentication failed.';
+          }
+        } else if (errType === 'quota') {
+          errMsg = 'AI request limit reached. Please try again later.';
+        } else if (errType === 'context_limit') {
+          errMsg = 'README context is too large for the AI model. Please try again with a smaller repository context.';
+        } else if (backendResult.error) {
+          errMsg = backendResult.error;
+        }
+      }
+      vscode.window.showErrorMessage(errMsg);
+      return;
     }
 
-    await vscode.window.withProgress({
-      location: vscode.ProgressLocation.Notification,
-      title: "Generating README.md with AI",
-      cancellable: false
-    }, async (progress) => {
-      
-      const report = (message) => progress.report({ message });
-
-      report("Analyzing project contents...");
-      const projectContext = await analyzeProject(repoPath);
-      if (!projectContext || !projectContext.success) {
-        throw new Error(projectContext ? projectContext.error : "Project analysis failed.");
+    const originalSections = parseSections(initialText);
+    const generatedSections = parseSections(backendResult.content);
+    
+    const matchResult = matchSections(originalSections, generatedSections);
+    
+    if (matchResult.reviewQueue.length === 0) {
+      vscode.window.showInformationMessage('No section changes suggested.');
+      activeReadmeSessions.delete(readmeUri.toString());
+      if (readmeCodeLensProvider) {
+        readmeCodeLensProvider.setState(readmeUri, 'idle');
       }
-
-      report("Running security scan...");
-      const scanResult = await scanProject(repoPath);
-      if (!scanResult || !scanResult.success) {
-        throw new Error(scanResult ? scanResult.error : "Security scan failed.");
+      return;
+    }
+    
+    session.status = 'reviewing';
+    if (readmeCodeLensProvider) {
+      readmeCodeLensProvider.fire();
+    }
+    
+    const ReadmeReviewPanel = require('./readmeReviewPanel');
+    ReadmeReviewPanel.createOrShow(
+      extensionContext.extensionUri,
+      session,
+      originalSections,
+      generatedSections,
+      matchResult,
+      async (finalContent) => {
+        session.finalContent = finalContent;
+        session.status = 'completed';
+        await applyReviewedChangesCommand(readmeUri);
       }
+    );
+  });
+}
 
-      if (!scanResult.clean) {
-        let warningLines = [];
-        if (scanResult.suspicious_files && scanResult.suspicious_files.length) {
-            warningLines.push("Suspicious files:");
-            scanResult.suspicious_files.forEach(f => warningLines.push(`  - ${f.file} (${f.reason})`));
-        }
-        if (scanResult.found_secrets && scanResult.found_secrets.length) {
-            warningLines.push("Potential secrets found:");
-            scanResult.found_secrets.forEach(s => warningLines.push(`  - ${s.file}: L${s.line} (${s.type})`));
-        }
-        
-        const details = warningLines.join('\n');
-        vscode.window.showWarningMessage(`Security Alert: Secrets/Sensitive files detected!\n${details}`);
+async function applyReviewedChangesCommand(uri) {
+  const readmeUri = uri || (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document.uri);
+  if (!readmeUri) return;
+  const session = activeReadmeSessions.get(readmeUri.toString());
+  if (!session) return;
 
-        const proceedChoice = await vscode.window.showWarningMessage(
-          "Sensitive files or API keys were detected in the project. Proceed with generating and saving README?",
-          { modal: true },
-          "Proceed Anyway", "Cancel"
-        );
-        if (proceedChoice !== "Proceed Anyway") {
-          return;
-        }
-      }
+  const document = await vscode.workspace.openTextDocument(readmeUri);
+  if (document.version !== session.initialDocumentVersion || document.getText() !== session.initialContent) {
+    vscode.window.showWarningMessage('README changed while AI review was in progress. Please generate again.');
+    activeReadmeSessions.delete(readmeUri.toString());
+    if (readmeCodeLensProvider) {
+      readmeCodeLensProvider.clearState(readmeUri);
+    }
+    return;
+  }
 
-      report("Calling Gemini API to generate README.md...");
-      const config = vscode.workspace.getConfiguration('github-automator');
-      const geminiModel = config.get('geminiModel', 'gemini-3.6-flash');
+  const edit = new vscode.WorkspaceEdit();
+  const fullRange = new vscode.Range(
+    document.positionAt(0),
+    document.positionAt(document.getText().length)
+  );
+  edit.replace(readmeUri, fullRange, session.finalContent);
+  
+  session.isApplyingOwnEdit = true;
+  const editApplied = await vscode.workspace.applyEdit(edit);
+  session.isApplyingOwnEdit = false;
 
-      const readmeGen = await generateReadme(repoPath, path.basename(repoPath), projectContext, geminiModel);
-      if (!readmeGen || !readmeGen.success) {
-        throw new Error(readmeGen ? readmeGen.error : "AI README generation failed.");
-      }
-
-      report("Saving README.md...");
-      const writeResult = await writeReadme(repoPath, readmeGen.text);
-      if (!writeResult.success) {
-        throw new Error(`Failed to save README.md: ${writeResult.error}`);
-      }
-
-      vscode.window.showInformationMessage("AI README.md generated and saved successfully!");
-
-      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(path.join(repoPath, 'README.md')));
-      await vscode.window.showTextDocument(doc);
-    });
-
-  } catch (error) {
-    vscode.window.showErrorMessage(`README generation failed: ${error && error.message ? error.message : String(error)}`);
+  if (editApplied) {
+    session.status = 'applied-unsaved';
+    if (readmeCodeLensProvider) {
+      readmeCodeLensProvider.fire();
+    }
   }
 }
+
+async function reviewFullDiffCommand(uri) {
+  const readmeUri = uri || (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document.uri);
+  if (!readmeUri) return;
+  const session = activeReadmeSessions.get(readmeUri.toString());
+  if (!session) return;
+
+  const originalFileName = `README.${session.sessionId}.original.md`;
+  const pendingFileName = `README.${session.sessionId}.pending.md`;
+  
+  const originalPath = path.join(os.tmpdir(), originalFileName);
+  const pendingPath = path.join(os.tmpdir(), pendingFileName);
+  
+  await fs.promises.writeFile(originalPath, session.initialContent, 'utf8');
+  await fs.promises.writeFile(pendingPath, session.finalContent, 'utf8');
+  
+  const originalUri = vscode.Uri.file(originalPath);
+  const pendingUri = vscode.Uri.file(pendingPath);
+  
+  await vscode.commands.executeCommand('vscode.diff', originalUri, pendingUri, 'README.md (Original) ↔ README.md (Reviewed Suggestion)');
+}
+
+async function discardReadmeSuggestionCommand(uri) {
+  const readmeUri = uri || (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document.uri);
+  if (!readmeUri) return;
+  const session = activeReadmeSessions.get(readmeUri.toString());
+  if (!session) return;
+
+  const ReadmeReviewPanel = require('./readmeReviewPanel');
+  if (ReadmeReviewPanel.currentPanel) {
+    ReadmeReviewPanel.currentPanel._panel.dispose();
+  }
+
+  const originalFileName = `README.${session.sessionId}.original.md`;
+  const pendingFileName = `README.${session.sessionId}.pending.md`;
+  const originalPath = path.join(os.tmpdir(), originalFileName);
+  const pendingPath = path.join(os.tmpdir(), pendingFileName);
+  
+  const tabs = vscode.window.tabGroups.all.flatMap(tg => tg.tabs);
+  for (const tab of tabs) {
+    if (tab.input && tab.input.uri) {
+      const uriStr = tab.input.uri.toString();
+      if (uriStr === vscode.Uri.file(originalPath).toString() || uriStr === vscode.Uri.file(pendingPath).toString()) {
+        await vscode.window.tabGroups.close(tab);
+      }
+    }
+  }
+
+  try {
+    await fs.promises.unlink(originalPath);
+  } catch (e) {}
+  try {
+    await fs.promises.unlink(pendingPath);
+  } catch (e) {}
+
+  activeReadmeSessions.delete(readmeUri.toString());
+  if (readmeCodeLensProvider) {
+    readmeCodeLensProvider.clearState(readmeUri);
+  }
+}
+
+async function commitReadmeChangesCommand(uri) {
+  await vscode.commands.executeCommand('github-automator.commitAndPush');
+  await dismissReadmeSessionCommand(uri);
+}
+
+async function dismissReadmeSessionCommand(uri) {
+  const readmeUri = uri || (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document.uri);
+  if (!readmeUri) return;
+  
+  activeReadmeSessions.delete(readmeUri.toString());
+  if (readmeCodeLensProvider) {
+    readmeCodeLensProvider.clearState(readmeUri);
+  }
+}
+
+// Old whole-file commands removed. Replaced by section-by-section handlers.
 
 
 async function showPanelCommand() {
@@ -3616,10 +3815,52 @@ function activate(context) {
   console.log('[GitHub Automator] providers registered');
   reposViewProvider = new RepositoriesWebviewProvider(context);
   actionsViewProvider = new ActionsWebviewProvider(context);
+  readmeCodeLensProvider = new ReadmeCodeLensProvider();
+  readmeCodeLensProvider.activeReadmeSessions = activeReadmeSessions;
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('github-automator.repoView', reposViewProvider),
-    vscode.window.registerWebviewViewProvider('github-automator.actionsView', actionsViewProvider)
+    vscode.window.registerWebviewViewProvider('github-automator.actionsView', actionsViewProvider),
+    vscode.languages.registerCodeLensProvider(
+      { language: 'markdown', scheme: 'file' },
+      readmeCodeLensProvider
+    ),
+    vscode.workspace.onDidChangeTextDocument(e => {
+      const fileName = path.basename(e.document.fileName).toLowerCase();
+      if (fileName === 'readme.md') {
+        const session = activeReadmeSessions.get(e.document.uri.toString());
+        if (session) {
+          if (session.isApplyingOwnEdit) return;
+          if (session.status === 'reviewing' || session.status === 'completed' || session.status === 'applied-unsaved') {
+            session.status = 'error';
+            readmeCodeLensProvider.fire();
+            vscode.window.showWarningMessage('README changed while AI review was in progress. Please close and re-evaluate.');
+            discardReadmeSuggestionCommand(e.document.uri);
+          }
+        } else {
+          readmeCodeLensProvider.clearState(e.document.uri);
+        }
+      }
+    }),
+    vscode.workspace.onDidOpenTextDocument(e => {
+      const fileName = path.basename(e.document.fileName).toLowerCase();
+      if (fileName === 'readme.md') {
+        const session = activeReadmeSessions.get(e.document.uri.toString());
+        if (!session) {
+          readmeCodeLensProvider.clearState(e.document.uri);
+        }
+      }
+    }),
+    vscode.workspace.onDidSaveTextDocument(e => {
+      const fileName = path.basename(e.fileName).toLowerCase();
+      if (fileName === 'readme.md') {
+        const session = activeReadmeSessions.get(e.uri.toString());
+        if (session && session.status === 'applied-unsaved') {
+          session.status = 'saved';
+          readmeCodeLensProvider.fire();
+        }
+      }
+    })
   );
   console.log(`[GitHub Automator] providers registered: ${Date.now() - startTime} ms`);
 
@@ -3654,7 +3895,12 @@ function activate(context) {
     vscode.commands.registerCommand('github-automator.initializeRepo', () => initializeRepoCommand()),
     vscode.commands.registerCommand('github-automator.commitAndPush', () => commitAndPushCommand()),
     vscode.commands.registerCommand('github-automator.aiGenerate', () => aiGenerateCommand()),
-    vscode.commands.registerCommand('github-automator.generateReadme', () => generateReadmeCommand())
+    vscode.commands.registerCommand('github-automator.generateReadme', (uri) => generateReadmeCommand(uri)),
+    vscode.commands.registerCommand('github-automator.applyReviewedChanges', (uri) => applyReviewedChangesCommand(uri)),
+    vscode.commands.registerCommand('github-automator.reviewFullDiff', (uri) => reviewFullDiffCommand(uri)),
+    vscode.commands.registerCommand('github-automator.discardReadmeSuggestion', (uri) => discardReadmeSuggestionCommand(uri)),
+    vscode.commands.registerCommand('github-automator.commitReadmeChanges', (uri) => commitReadmeChangesCommand(uri)),
+    vscode.commands.registerCommand('github-automator.dismissReadmeSession', (uri) => dismissReadmeSessionCommand(uri))
   ];
 
   context.subscriptions.push(...commands);

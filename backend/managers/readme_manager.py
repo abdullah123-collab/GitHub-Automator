@@ -26,7 +26,10 @@ def load_env_safely(env_path: Path):
         pass
 
 # Load environment variables
-load_env_safely(Path(backend_dir) / ".env")
+env_path = Path(backend_dir).parent / ".env"
+if not env_path.exists():
+    env_path = Path(backend_dir) / ".env"
+load_env_safely(env_path)
 
 CREATION_FLAGS = 0x08000000 if sys.platform == 'win32' else 0
 
@@ -259,7 +262,7 @@ def analyze_repo_for_readme(repo_path: str) -> dict:
             except Exception:
                 pass
 
-    db_keywords = {"postgresql", "postgres", "mysql", "sqlite", "mongodb", "mongoose", "redis", "mariadb", "oracle", "mssql", "sqlserver", "cassandra", "sqlalchemy", "psycopg2"}
+    db_keywords = {"postgresql", "postgres", "mysql", "sqlite", "mongodb", "mongoose", "redis", "mariadb", "oracle", "mssql", "sqlserver", "cassandra", "sqlalchemy", "psycopg2", "pg"}
     for dep in dependencies:
         dep_lower = dep.lower()
         for kw in db_keywords:
@@ -276,7 +279,7 @@ def analyze_repo_for_readme(repo_path: str) -> dict:
         techs_list = ["General"]
 
     proj_type = "Generic/Other"
-    if "React (JSX)" in techs_list or "React (TSX)" in techs_list:
+    if "React (JSX)" in techs_list or "React (TSX)" in techs_list or "React" in techs_list:
         proj_type = "React Application"
     elif "Node.js" in techs_list:
         proj_type = "Node.js Project"
@@ -345,14 +348,15 @@ def load_source_contents_for_prompt(repo_path: str, important_files: list) -> st
 
     return "\n".join(snippets)
 
-def generate_readme(repo_path: str, existing_content: str = None, model: str = "gemini-3.6-flash") -> dict:
+def generate_readme(repo_path: str, existing_content: str = None, selected_text: str = None, model: str = "gemini-3.6-flash") -> dict:
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key:
         return {
             "success": False,
             "content": None,
             "error_type": "auth",
-            "error": "AI Generation Failed: No valid GEMINI_API_KEY found in .env file."
+            "error_source": "gemini",
+            "error": "AI authentication failed. Please check your Gemini API configuration."
         }
 
     analysis = analyze_repo_for_readme(repo_path)
@@ -366,28 +370,42 @@ def generate_readme(repo_path: str, existing_content: str = None, model: str = "
 
     source_snippets = load_source_contents_for_prompt(repo_path, analysis.get("importantFiles", []))
 
-    prompt = (
-        f"You are an expert AI README generator. Generate/Update a professional README.md for a repository named '{analysis.get('name')}'.\n"
-        f"Analyze the project type, directories, and source snippets carefully to describe actual functionality.\n"
-        f"CRITICAL RULES:\n"
-        f"1. Only describe features, technologies, commands, and structures that are verified to exist in the repository evidence. Do NOT invent features, database setups, installation commands, dependency names, URLs, credentials, or screenshots.\n"
-        f"2. Do NOT use any template placeholders like '[Insert ...]', '[Add ...]', '[Your ...]', 'TODO', 'TBD', or 'Lorem ipsum' in the generated README.md.\n"
-        f"3. Return ONLY the valid Markdown text of the README, nothing else (no wrapper markdown blocks like ```markdown)."
-    )
-
-    if existing_content and existing_content.strip():
-        prompt += (
-            f"\n\n--- EXISTING README.md ---\n"
-            f"{existing_content}\n"
-            f"---------------------------\n"
-            f"\nINSTRUCTION FOR EXISTING README:\n"
-            f"You are performing an UPDATE. Carefully improve/update the existing README content with new findings from the project context.\n"
-            f"Preserve useful existing project-specific information, explanations, context, and details. Do NOT blindly rewrite everything or delete details that cannot be scanned (such as project overview prose or custom guides).\n"
+    if selected_text and selected_text.strip():
+        prompt = (
+            f"You are an expert AI editor. You are updating a selected block of text from a README.md file named '{analysis.get('name')}'.\n"
+            f"The user has highlighted this specific text for improvement:\n"
+            f"--- SELECTED TEXT ---\n"
+            f"{selected_text}\n"
+            f"----------------------\n"
+            f"Review the full repository context and any files below to make context-aware improvements. Only suggest changes supported by actual codebase evidence.\n"
+            f"CRITICAL RULES:\n"
+            f"1. Improve the selected text's grammar, details, structure, or formatting based on the repository context.\n"
+            f"2. Return ONLY the improved version of the selected text, with no extra explanation, no wrapper markdown blocks like ```markdown, and no context headers. Your entire output will replace the selected text directly.\n"
+            f"3. Do not invent features or commands. Preserve useful information unless it is demonstrably outdated."
         )
     else:
-        prompt += (
-            f"\n\nFormat the new README logically. Sections may include: Project Title, Description (overview), Features (actual features), Tech Stack (detected technologies), Installation (only if known), Database (only if database info exists), Configuration (only if configuration parameters exist), Directory Structure (actual directories).\n"
+        prompt = (
+            f"You are an expert AI README generator. Generate/Update a professional README.md for a repository named '{analysis.get('name')}'.\n"
+            f"Analyze the project type, directories, and source snippets carefully to describe actual functionality.\n"
+            f"CRITICAL RULES:\n"
+            f"1. Only describe features, technologies, commands, and structures that are verified to exist in the repository evidence. Do NOT invent features, database setups, installation commands, dependency names, URLs, credentials, or screenshots.\n"
+            f"2. Do NOT use any template placeholders like '[Insert ...]', '[Add ...]', '[Your ...]', 'TODO', 'TBD', or 'Lorem ipsum' in the generated README.md.\n"
+            f"3. Return ONLY the valid Markdown text of the README, nothing else (no wrapper markdown blocks like ```markdown)."
         )
+
+        if existing_content and existing_content.strip():
+            prompt += (
+                f"\n\n--- EXISTING README.md ---\n"
+                f"{existing_content}\n"
+                f"---------------------------\n"
+                f"\nINSTRUCTION FOR EXISTING README:\n"
+                f"You are performing an UPDATE. Carefully improve/update the existing README content with new findings from the project context.\n"
+                f"Preserve useful existing project-specific information, explanations, context, and details. Do NOT blindly rewrite everything or delete details that cannot be scanned (such as project overview prose or custom guides).\n"
+            )
+        else:
+            prompt += (
+                f"\n\nFormat the new README logically. Sections may include: Project Title, Description (overview), Features (actual features), Tech Stack (detected technologies), Installation (only if known), Database (only if database info exists), Configuration (only if configuration parameters exist), Directory Structure (actual directories).\n"
+            )
 
     prompt += (
         f"\n--- PROJECT CONTEXT ---\n"
@@ -410,25 +428,40 @@ def generate_readme(repo_path: str, existing_content: str = None, model: str = "
     if not result.get("success"):
         error_msg = result.get("error", "Unknown error")
         
-        if "authenticationerror" in error_msg.lower() or "unauthorized" in error_msg.lower():
+        # Log the underlying exception/error response before classification
+        sys.stderr.write(f"[README ERROR DIAGNOSTIC] Raw AI response/error: {error_msg}\n")
+        
+        err_msg_lower = error_msg.lower()
+        if "authenticationerror" in err_msg_lower or "unauthorized" in err_msg_lower or "api_key_invalid" in err_msg_lower or "invalid api key" in err_msg_lower:
             return {
                 "success": False,
                 "content": None,
                 "error_type": "auth",
-                "error": "GitHub authentication/session error."
+                "error_source": "gemini",
+                "error": "AI authentication failed. Please check your Gemini API configuration."
             }
-        elif "ratelimiterror" in error_msg.lower():
+        elif "context_limit" in err_msg_lower or "context limit" in err_msg_lower or "token limit" in err_msg_lower or "max tokens" in err_msg_lower or "too large" in err_msg_lower or "context length" in err_msg_lower:
             return {
                 "success": False,
                 "content": None,
-                "error_type": "api",
-                "error": "Gemini API rate limit exceeded. Please try again later."
+                "error_type": "context_limit",
+                "error_source": "gemini",
+                "error": "README context is too large for the AI model. Please try again with a smaller repository context."
             }
-        elif "timeouterror" in error_msg.lower() or "timeout" in error_msg.lower() or "networkerror" in error_msg.lower() or "connection" in error_msg.lower() or "dns" in error_msg.lower():
+        elif "ratelimiterror" in err_msg_lower or "rate limit" in err_msg_lower or "quota" in err_msg_lower or "limit exceeded" in err_msg_lower:
+            return {
+                "success": False,
+                "content": None,
+                "error_type": "quota",
+                "error_source": "gemini",
+                "error": "AI request limit reached. Please try again later."
+            }
+        elif "timeouterror" in err_msg_lower or "timeout" in err_msg_lower or "networkerror" in err_msg_lower or "connection" in err_msg_lower or "dns" in err_msg_lower or "unreachable" in err_msg_lower:
             return {
                 "success": False,
                 "content": None,
                 "error_type": "network",
+                "error_source": "gemini",
                 "error": "No internet connection. Please check your connection and try again."
             }
         else:
@@ -436,10 +469,19 @@ def generate_readme(repo_path: str, existing_content: str = None, model: str = "
                 "success": False,
                 "content": None,
                 "error_type": "api",
+                "error_source": "gemini",
                 "error": f"Unable to generate README using AI. Detail: {error_msg}"
             }
 
     content = result.get("text", "")
+    if content:
+        content = content.strip()
+        if content.startswith("```markdown"):
+            content = content[len("```markdown"):].strip()
+        elif content.startswith("```"):
+            content = content[len("```"):].strip()
+        if content.endswith("```"):
+            content = content[:-3].strip()
 
     if not content or not content.strip():
         return {
@@ -464,9 +506,10 @@ if __name__ == "__main__":
         args = json.loads(sys.stdin.read())
         repo_path = args.get("repo_path", "")
         existing_content = args.get("existing_content", None)
+        selected_text = args.get("selected_text", None)
         model = args.get("model", "gemini-3.6-flash")
 
-        res = generate_readme(repo_path, existing_content, model)
+        res = generate_readme(repo_path, existing_content, selected_text, model)
         print(json.dumps(res))
     except Exception as e:
         print(json.dumps({

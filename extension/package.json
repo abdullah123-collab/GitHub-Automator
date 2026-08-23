@@ -72,6 +72,14 @@
         "command": "github-automator.generateReadme",
         "title": "GitHub Automator: Generate AI README.md",
         "icon": "$(markdown)"
+      },
+      {
+        "command": "github-automator.acceptReadmeSuggestion",
+        "title": "GitHub Automator: Accept AI README"
+      },
+      {
+        "command": "github-automator.discardReadmeSuggestion",
+        "title": "GitHub Automator: Discard AI README"
       }
     ],
     "menus": {

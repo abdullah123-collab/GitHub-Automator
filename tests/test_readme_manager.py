@@ -138,7 +138,8 @@ class ReadmeManagerTests(unittest.TestCase):
             res = generate_readme(repo_dir)
             self.assertFalse(res["success"])
             self.assertEqual(res["error_type"], "auth")
-            self.assertEqual(res["error"], "GitHub authentication/session error.")
+            self.assertEqual(res["error_source"], "gemini")
+            self.assertEqual(res["error"], "AI authentication failed. Please check your Gemini API configuration.")
 
     @patch('managers.readme_manager.generate_text')
     def test_generate_readme_rate_limit_error(self, mock_generate):
@@ -150,8 +151,23 @@ class ReadmeManagerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as repo_dir:
             res = generate_readme(repo_dir)
             self.assertFalse(res["success"])
-            self.assertEqual(res["error_type"], "api")
-            self.assertIn("rate limit", res["error"])
+            self.assertEqual(res["error_type"], "quota")
+            self.assertEqual(res["error_source"], "gemini")
+            self.assertEqual(res["error"], "AI request limit reached. Please try again later.")
+
+    @patch('managers.readme_manager.generate_text')
+    def test_generate_readme_context_limit_error(self, mock_generate):
+        """Test context/token limit error classification."""
+        mock_generate.return_value = {
+            "success": False,
+            "error": "Gemini API error: HTTP 400 Bad Request: token limit exceeded"
+        }
+        with tempfile.TemporaryDirectory() as repo_dir:
+            res = generate_readme(repo_dir)
+            self.assertFalse(res["success"])
+            self.assertEqual(res["error_type"], "context_limit")
+            self.assertEqual(res["error_source"], "gemini")
+            self.assertIn("context is too large", res["error"])
 
     @patch('managers.readme_manager.generate_text')
     def test_generate_readme_network_error(self, mock_generate):
@@ -164,7 +180,20 @@ class ReadmeManagerTests(unittest.TestCase):
             res = generate_readme(repo_dir)
             self.assertFalse(res["success"])
             self.assertEqual(res["error_type"], "network")
+            self.assertEqual(res["error_source"], "gemini")
             self.assertIn("No internet connection", res["error"])
+
+    @patch('managers.readme_manager.generate_text')
+    def test_generate_readme_selection_success(self, mock_generate):
+        """Test selection-based generate_readme call and cleanup."""
+        mock_generate.return_value = {
+            "success": True,
+            "text": "```markdown\nThis is updated selection content.\n```"
+        }
+        with tempfile.TemporaryDirectory() as repo_dir:
+            res = generate_readme(repo_dir, selected_text="Original selection")
+            self.assertTrue(res["success"])
+            self.assertEqual(res["content"], "This is updated selection content.")
 
 def import_json_dumps(obj):
     import json
