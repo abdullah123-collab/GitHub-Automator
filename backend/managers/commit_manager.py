@@ -22,13 +22,18 @@ CREATION_FLAGS = 0x08000000 if sys.platform == 'win32' else 0
 def _run(cmd: list, cwd: str, timeout: int = 30) -> Tuple[bool, str]:
     """Run a git command and return (success, output)."""
     try:
+        import os
+        env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_MERGE_AUTOEDIT"] = "no"
         result = subprocess.run(
             cmd,
             cwd=cwd,
             capture_output=True,
             text=True,
             timeout=timeout,
-            creationflags=CREATION_FLAGS
+            creationflags=CREATION_FLAGS,
+            env=env
         )
         stdout = result.stdout.strip() if result.stdout else ""
         stderr = result.stderr.strip() if result.stderr else ""
@@ -97,14 +102,19 @@ def pull(repo_path: str) -> Tuple[bool, str]:
     Run git pull to fetch and merge remote changes.
     Returns (success: bool, message: str)
     """
-    ok, msg = _run(["git", "pull"], cwd=repo_path, timeout=60)
+    ok, msg = _run(["git", "pull", "--no-edit"], cwd=repo_path, timeout=60)
     
-    if not ok and "conflict" in msg.lower():
-        conflict_ok, conflict_files = _run(["git", "diff", "--name-only", "--diff-filter=U"], cwd=repo_path)
-        if conflict_ok and conflict_files:
-            return False, f"Merge conflicts in: {conflict_files}. Please manually resolve conflicts in VS Code, then commit and push. Or run 'git merge --abort' to cancel the merge."
-        else:
-            return False, f"Merge conflicts detected. Please manually resolve conflicts in VS Code, then commit and push. Or run 'git merge --abort' to cancel the merge."
+    if not ok:
+        msg_lower = msg.lower()
+        if "terminal prompts disabled" in msg_lower or "could not read username" in msg_lower or "could not read password" in msg_lower or "authentication failed" in msg_lower or "permission denied" in msg_lower:
+            return False, "Git authentication failed or required terminal prompts. Please run 'git pull' manually in your VS Code terminal to log in/authenticate."
+        
+        if "conflict" in msg_lower:
+            conflict_ok, conflict_files = _run(["git", "diff", "--name-only", "--diff-filter=U"], cwd=repo_path)
+            if conflict_ok and conflict_files:
+                return False, f"Merge conflicts in: {conflict_files}. Please manually resolve conflicts in VS Code, then commit and push. Or run 'git merge --abort' to cancel the merge."
+            else:
+                return False, f"Merge conflicts detected. Please manually resolve conflicts in VS Code, then commit and push. Or run 'git merge --abort' to cancel the merge."
     
     return ok, msg
 
@@ -116,27 +126,45 @@ def push(repo_path: str) -> Tuple[bool, str]:
     """
     ok, msg = _run(["git", "push"], cwd=repo_path, timeout=60)
     
-    if not ok and ("rejected" in msg.lower() or "fetch first" in msg.lower()):
-        pull_ok, pull_msg = pull(repo_path)
-        if pull_ok:
-            retry_ok, retry_msg = _run(["git", "push"], cwd=repo_path, timeout=60)
-            if retry_ok:
-                return True, "Pulled remote changes and pushed successfully"
-            else:
-                return False, f"Pulled changes but push still failed: {retry_msg}"
-        else:
-            return False, f"Failed to pull remote changes: {pull_msg}. Please resolve conflicts manually and try again."
+    if not ok:
+        msg_lower = msg.lower()
+        # 1. Detect authentication failures immediately on the first attempt
+        if "terminal prompts disabled" in msg_lower or "could not read username" in msg_lower or "could not read password" in msg_lower or "authentication failed" in msg_lower or "permission denied" in msg_lower:
+            return False, "Git authentication failed or required terminal prompts. Please run 'git push' manually in your VS Code terminal to log in/authenticate."
             
-    if not ok and ("no upstream branch" in msg.lower() or "set-upstream" in msg.lower()):
-        branch_ok, branch_msg = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path)
-        if branch_ok and branch_msg:
-            branch = branch_msg.strip()
-            ok, msg = _run(["git", "push", "--set-upstream", "origin", branch], cwd=repo_path, timeout=60)
-            if ok:
-                return True, f"Pushed successfully and set upstream to origin/{branch}"
+        # 2. If rejected due to remote changes
+        if "rejected" in msg_lower or "fetch first" in msg_lower:
+            pull_ok, pull_msg = pull(repo_path)
+            if pull_ok:
+                retry_ok, retry_msg = _run(["git", "push"], cwd=repo_path, timeout=60)
+                if retry_ok:
+                    return True, "Pulled remote changes and pushed successfully"
+                else:
+                    retry_msg_lower = retry_msg.lower()
+                    if "terminal prompts disabled" in retry_msg_lower or "could not read username" in retry_msg_lower or "could not read password" in retry_msg_lower or "authentication failed" in retry_msg_lower or "permission denied" in retry_msg_lower:
+                        return False, f"Pulled changes but push failed due to authentication: {retry_msg}"
+                    return False, f"Pulled changes but push still failed: {retry_msg}"
             else:
-                return False, f"Failed to push with upstream branch {branch}: {msg}"
-
+                # Distinguish authentication failures from merge conflicts
+                pull_msg_lower = pull_msg.lower()
+                if "authentication" in pull_msg_lower or "terminal prompt" in pull_msg_lower or "username" in pull_msg_lower or "password" in pull_msg_lower or "permission denied" in pull_msg_lower:
+                    return False, f"Failed to pull remote changes: {pull_msg}"
+                return False, f"Failed to pull remote changes: {pull_msg}. Please resolve conflicts manually and try again."
+                
+        # 3. If upstream branch is not set
+        if "no upstream branch" in msg_lower or "set-upstream" in msg_lower:
+            branch_ok, branch_msg = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path)
+            if branch_ok and branch_msg:
+                branch = branch_msg.strip()
+                ok, msg = _run(["git", "push", "--set-upstream", "origin", branch], cwd=repo_path, timeout=60)
+                if ok:
+                    return True, f"Pushed successfully and set upstream to origin/{branch}"
+                else:
+                    msg_lower_up = msg.lower()
+                    if "terminal prompts disabled" in msg_lower_up or "could not read username" in msg_lower_up or "could not read password" in msg_lower_up or "authentication failed" in msg_lower_up or "permission denied" in msg_lower_up:
+                        return False, f"Failed to push with upstream branch {branch}: Git authentication failed or required terminal prompts. Please run 'git push' manually in your terminal."
+                    return False, f"Failed to push with upstream branch {branch}: {msg}"
+                    
     return ok, msg
 
 
