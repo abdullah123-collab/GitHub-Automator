@@ -8,6 +8,9 @@
   "categories": ["Other"],
   "activationEvents": ["onStartupFinished", "onView:github-automator"],
   "main": "./src/extension.js",
+  "scripts": {
+    "vscode:prepublish": "node ./scripts/copy-backend.js"
+  },
   "contributes": {
     "commands": [
       {
@@ -80,6 +83,14 @@
       {
         "command": "github-automator.discardReadmeSuggestion",
         "title": "GitHub Automator: Discard AI README"
+      },
+      {
+        "command": "github-automator.configureGeminiApiKey",
+        "title": "GitHub Automator: Configure Gemini API Key"
+      },
+      {
+        "command": "github-automator.removeGeminiApiKey",
+        "title": "GitHub Automator: Remove Gemini API Key"
       }
     ],
     "menus": {
