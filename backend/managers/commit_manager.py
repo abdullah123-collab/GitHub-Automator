@@ -70,16 +70,19 @@ def get_status(repo_path: str) -> Tuple[bool, list]:
 def get_diff(repo_path: str, staged: bool = False) -> Tuple[bool, str]:
     """
     Returns the diff of the working tree.
-    If staged=True, returns only staged diff.
+    If staged=True, returns ONLY staged diff (git diff --cached).
     Limits to 4000 chars to keep AI prompt manageable.
     """
     cmd = ["git", "diff"]
     if staged:
-        cmd.append("--staged")
+        cmd.append("--cached")
     ok, diff = _run(cmd, cwd=repo_path)
     if not ok:
         return False, diff
-    # Also grab untracked file names for context
+    
+    if staged:
+        return True, diff[:4000]
+        
     _, status = _run(["git", "status", "--short"], cwd=repo_path)
     combined = f"{status}\n\n{diff}"
     return True, combined[:4000]

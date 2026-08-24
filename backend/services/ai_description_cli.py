@@ -80,7 +80,8 @@ def extract_repo_context(repo_path: str) -> str:
 if __name__ == "__main__":
     args = json.loads(sys.stdin.buffer.read().decode('utf-8'))
     repo_name = args.get("repo_name", "")
-    api_key = os.getenv("GEMINI_API_KEY", "")
+    api_key = args.get("api_key") or os.getenv("GEMINI_API_KEY", "")
+    ai_mode = args.get("ai_mode", "gemini")
     model = args.get("model", "gemini-3.6-flash")
     
     repo_path = args.get("repo_path", "")
@@ -107,5 +108,5 @@ if __name__ == "__main__":
     else:
         context_str = extract_repo_context(repo_path)
         
-    result = generate_description(repo_name, api_key, context_str, model)
+    result = generate_description(repo_name, api_key=api_key, context_str=context_str, model=model, ai_mode=ai_mode)
     print(json.dumps(result))

@@ -23,6 +23,7 @@ load_env_safely(env_path)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.ai_gateway import generate_text
+from services.ai_result import success_result, failure_result, AIErrorCode
 
 def load_source_contents(repo_path: str, important_files: list) -> str:
     """Load safe, small snippets of code for AI README generation."""
@@ -130,14 +131,19 @@ def main():
     repo_path = args.get("repo_path", "")
     model = args.get("model", "gemini-3.6-flash")
     project_context = args.get("project_context", {})
+    api_key = args.get("api_key") or os.getenv("GEMINI_API_KEY", "")
+    ai_mode = args.get("ai_mode", "gemini")
     
     sys.stderr.write("[DIAGNOSTIC] README generation started\n")
     sys.stderr.write("[DIAGNOSTIC] Project context generated\n")
     sys.stderr.write(f"[DIAGNOSTIC] Project context size: {len(json.dumps(project_context))}\n")
 
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
-        print(json.dumps({"success": False, "error": "No GEMINI_API_KEY found in .env"}))
+    if ai_mode == "fallback" or not api_key:
+        print(json.dumps(failure_result(
+            AIErrorCode.INVALID_API_KEY,
+            "No Gemini API key configured.",
+            "Gemini API key is missing or fallback requested, but no local fallback is available for README generation."
+        )))
         return
         
     source_snippets = load_source_contents(repo_path, project_context.get("importantFiles", []))
@@ -179,35 +185,42 @@ def main():
         if err_type:
             sys.stderr.write(f"[DIAGNOSTIC] README validation result: FAIL\n")
             sys.stderr.write(f"[DIAGNOSTIC] README validation failed: {err_type} - {err_details}\n")
-            result = {
-                "success": False,
-                "error": f"{err_type}: {err_details}"
-            }
+            print(json.dumps(failure_result(
+                AIErrorCode.EMPTY_RESPONSE,
+                f"Generated README validation failed: {err_type}",
+                err_details
+            )))
         else:
             sys.stderr.write(f"[DIAGNOSTIC] README validation result: PASS\n")
             sys.stderr.write("[DIAGNOSTIC] README saved\n")
-            result = {
-                "success": True,
-                "text": text
-            }
+            print(json.dumps(success_result(text)))
     else:
         sys.stderr.write("[DIAGNOSTIC] Gemini response received\n")
         sys.stderr.write("[DIAGNOSTIC] README validation result: FAIL\n")
         error_msg = result.get('error', 'Unknown error')
         sys.stderr.write(f"[DIAGNOSTIC] README validation failed: AI request failure - {error_msg}\n")
         
-        if 'timeouterror' in error_msg.lower():
-            result["error"] = "AI README generation timed out. Please try again."
-        elif 'authenticationerror' in error_msg.lower():
-            result["error"] = "Invalid Gemini API Key or authorization error. Please check your .env file."
-        elif 'ratelimiterror' in error_msg.lower():
-            result["error"] = "Gemini API rate limit exceeded. Please try again later."
-        elif 'networkerror' in error_msg.lower():
-            result["error"] = "Network connection error. Please verify your internet connection."
+        err_lower = error_msg.lower()
+        if 'timeouterror' in err_lower or 'timeout' in err_lower:
+            code = AIErrorCode.TIMEOUT
+            msg = "AI README generation timed out. Please try again."
+        elif 'authenticationerror' in err_lower or 'unauthorized' in err_lower or 'api_key_invalid' in err_lower or '401' in err_lower or '403' in err_lower:
+            code = AIErrorCode.INVALID_API_KEY
+            msg = "Invalid Gemini API Key or authorization error."
+        elif 'ratelimiterror' in err_lower or '429' in err_lower or 'quota' in err_lower:
+            code = AIErrorCode.RATE_LIMIT_EXCEEDED
+            msg = "Gemini API rate limit exceeded or quota exhausted. Please try again later."
+        elif 'networkerror' in err_lower or 'connection' in err_lower or 'dns' in err_lower:
+            code = AIErrorCode.NETWORK_FAILURE
+            msg = "Network connection error. Please verify your internet connection."
+        elif '404' in err_lower or 'not_found' in err_lower:
+            code = AIErrorCode.MODEL_NOT_FOUND
+            msg = f"Invalid Gemini Model '{model}' selected. Please fix settings."
         else:
-            result["error"] = f"AI README generation failed: {error_msg}"
+            code = AIErrorCode.UNKNOWN
+            msg = f"AI README generation failed: {error_msg}"
             
-    print(json.dumps(result))
+        print(json.dumps(failure_result(code, msg, error_msg)))
 
 if __name__ == "__main__":
     main()

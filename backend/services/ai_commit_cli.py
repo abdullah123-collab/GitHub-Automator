@@ -30,8 +30,9 @@ from services.ai_commit import generate_commit_message
 if __name__ == "__main__":
     data = json.loads(sys.stdin.buffer.read().decode('utf-8'))
     diff = data.get("diff", "")
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    
+    api_key = data.get("api_key") or os.getenv("GEMINI_API_KEY", "")
+    ai_mode = data.get("ai_mode", "gemini")
     model = data.get("model", "gemini-3.6-flash")
-    result = generate_commit_message(diff, api_key, model)
+    
+    result = generate_commit_message(diff, api_key=api_key, model=model, ai_mode=ai_mode)
     print(json.dumps(result))

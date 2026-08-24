@@ -8,48 +8,52 @@ Provides:
 
 import re
 from services.ai_gateway import generate_text
+from services.ai_result import success_result, failure_result, AIErrorCode
 
-def generate_commit_message(diff: str, api_key: str = "", model: str = "gemini-3.6-flash") -> dict:
+def generate_commit_message(diff: str, api_key: str = "", model: str = "gemini-3.6-flash", ai_mode: str = "gemini") -> dict:
     """
     Generate a commit message from a diff.
-    If api_key is provided, uses Gemini API.
-    Otherwise, uses the local rule-based fallback.
+    If ai_mode is "fallback", or no api_key is provided, uses the local rule-based fallback.
     """
     if not diff.strip():
-        return {"success": False, "error": "Empty diff"}
+        return failure_result(AIErrorCode.EMPTY_RESPONSE, "Empty diff", "No diff content provided.")
+
+    if ai_mode == "fallback" or not api_key or api_key.startswith("demo"):
+        return success_result(_rule_based_message(diff))
 
     try:
-        # Try Gemini API first if key is provided
-        if api_key and api_key != "" and not api_key.startswith("demo"):
-            prompt = f"Write a concise git commit message in Conventional Commits format for this diff. Only output the commit message, nothing else:\n\n{diff[:3000]}"
-            result = generate_text(prompt, api_key, model=model, max_tokens=150)
+        prompt = f"Write a concise git commit message in Conventional Commits format for this diff. Only output the commit message, nothing else:\n\n{diff[:3000]}"
+        result = generate_text(prompt, api_key, model=model, max_tokens=150)
+        
+        if result["success"]:
+            return success_result(result["text"].strip())
             
-            if result["success"]:
-                return {"success": True, "message": result["text"].strip()}
-                
-            # Sanitize error and do not fall through to rule-based fallback
-            error_msg = result.get('error', 'Unknown error')
-            if 'timeouterror' in error_msg.lower():
-                return {"success": False, "error": "AI commit message generation timed out. Please try again."}
-            elif 'authenticationerror' in error_msg.lower():
-                return {"success": False, "error": "Invalid Gemini API Key or authorization error. Please check your .env file or VS Code settings."}
-            elif 'ratelimiterror' in error_msg.lower():
-                return {"success": False, "error": "Gemini API rate limit exceeded or quota exhausted. Please try again later."}
-            elif 'networkerror' in error_msg.lower():
-                return {"success": False, "error": "Network connection error. Please verify your internet connection."}
-            elif '404' in error_msg or 'NOT_FOUND' in error_msg:
-                return {"success": False, "error": f"Invalid Gemini Model '{model}' selected. Please fix 'github-automator.geminiModel' in your VS Code settings."}
-            else:
-                clean_err = error_msg
-                for prefix in ["Gemini API error: ", "AuthenticationError: ", "RateLimitError: ", "NetworkError: ", "TimeoutError: "]:
-                    if clean_err.startswith(prefix):
-                        clean_err = clean_err[len(prefix):]
-                return {"success": False, "error": f"AI Generation Failed: {clean_err}"}
+        error_msg = result.get('error', 'Unknown error')
+        err_lower = error_msg.lower()
+        
+        if 'timeouterror' in err_lower or 'timeout' in err_lower:
+            code = AIErrorCode.TIMEOUT
+            msg = "AI commit message generation timed out. Please try again."
+        elif 'authenticationerror' in err_lower or 'unauthorized' in err_lower or 'api_key_invalid' in err_lower or '401' in err_lower or '403' in err_lower:
+            code = AIErrorCode.INVALID_API_KEY
+            msg = "Invalid Gemini API Key or authorization error."
+        elif 'ratelimiterror' in err_lower or '429' in err_lower or 'quota' in err_lower:
+            code = AIErrorCode.RATE_LIMIT_EXCEEDED
+            msg = "Gemini API rate limit exceeded or quota exhausted. Please try again later."
+        elif 'networkerror' in err_lower or 'connection' in err_lower or 'dns' in err_lower:
+            code = AIErrorCode.NETWORK_FAILURE
+            msg = "Network connection error. Please verify your internet connection."
+        elif '404' in err_lower or 'not_found' in err_lower:
+            code = AIErrorCode.MODEL_NOT_FOUND
+            msg = f"Invalid Gemini Model '{model}' selected. Please fix settings."
+        else:
+            code = AIErrorCode.UNKNOWN
+            msg = f"AI Generation Failed: {error_msg}"
             
-        return {"success": False, "error": "AI Generation Failed: No valid GEMINI_API_KEY found in .env file."}
+        return failure_result(code, msg, error_msg, fallback_content=_rule_based_message(diff))
 
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return failure_result(AIErrorCode.UNKNOWN, str(e), str(e), fallback_content=_rule_based_message(diff))
 
 
 def _rule_based_message(diff: str) -> str:
