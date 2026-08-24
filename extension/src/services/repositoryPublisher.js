@@ -8,7 +8,7 @@ const { initGitRepo, getRepoInfo, stageAndCommit, addRemote, pushToRemote } = re
 const { createRepo, checkRemoteRepoExists } = require('./githubService');
 const { runPythonScript } = require('../pythonBridge');
 
-const backendRoot = path.join(__dirname, '../../../backend');
+const fs = require('fs'); const backendRoot = fs.existsSync(path.join(__dirname, '../../backend')) ? path.join(__dirname, '../../backend') : path.join(__dirname, '../../../backend');
 
 async function publishFolder(extensionContext, reposViewProvider) {
   try {

@@ -2,7 +2,7 @@ const { runPythonScript } = require('../pythonBridge');
 const path = require('path');
 const fs = require('fs');
 
-const backendRoot = path.join(__dirname, '../../../backend');
+const backendRoot = fs.existsSync(path.join(__dirname, '../../backend')) ? path.join(__dirname, '../../backend') : path.join(__dirname, '../../../backend');
 
 async function detectReadme(repoPath) {
   try {

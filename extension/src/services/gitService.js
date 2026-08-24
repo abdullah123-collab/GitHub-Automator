@@ -1,7 +1,7 @@
 const { runPythonScript } = require('../pythonBridge');
 const path = require('path');
 
-const backendRoot = path.join(__dirname, '../../../backend');
+const fs = require('fs'); const backendRoot = fs.existsSync(path.join(__dirname, '../../backend')) ? path.join(__dirname, '../../backend') : path.join(__dirname, '../../../backend');
 
 async function initGitRepo(repoPath, defaultBranch) {
   const scriptPath = path.join(backendRoot, 'managers/local_repo.py');
