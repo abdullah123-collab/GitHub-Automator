@@ -4,6 +4,7 @@ const os = require('os');
 const fs = require('fs');
 const { runPythonScript, getPersistentPythonProcess } = require('./pythonBridge');
 const { callAiService, CancellationError } = require('./services/aiClient');
+const { initCredentialManager, configureGeminiApiKey, removeGeminiApiKey } = require('./services/credentialManager');
 const { publishFolder } = require('./services/repositoryPublisher');
 const { ReadmeCodeLensProvider } = require('./readmeCodeLensProvider');
 const { parseSections, matchSections, reassembleDocument } = require('./readmeSectionParser');
@@ -1666,7 +1667,7 @@ async function createRepoCommand() {
       const inputBox = vscode.window.createInputBox();
       inputBox.title = 'Create Repository';
       inputBox.prompt = '✨ AI Auto-Generation';
-      inputBox.placeholder = 'Click the $(sparkle) icon on the top right to auto-generate, or type manually';
+      inputBox.placeholder = 'Click the ✨ icon on the top right to auto-generate, or type manually';
       inputBox.ignoreFocusOut = true;
       inputBox.buttons = [
         {
@@ -1704,7 +1705,7 @@ async function createRepoCommand() {
 
             if (generated && generated.success) {
               inputBox.value = generated.content || prevValue;
-              inputBox.placeholder = 'Click the $(sparkle) icon on the top right to auto-generate, or type manually';
+              inputBox.placeholder = 'Click the ✨ icon on the top right to auto-generate, or type manually';
               inputBox.enabled = true;
               inputBox.busy = false;
               inputBox.validationMessage = '';
@@ -1712,14 +1713,14 @@ async function createRepoCommand() {
               const errorMessage = generated && generated.error && generated.error.message ? generated.error.message : (generated && generated.error ? String(generated.error) : 'Generation failed');
               inputBox.enabled = true;
               inputBox.busy = false;
-              inputBox.placeholder = 'Click the $(sparkle) icon on the top right to auto-generate, or type manually';
+              inputBox.placeholder = 'Click the ✨ icon on the top right to auto-generate, or type manually';
               inputBox.value = prevValue;
               inputBox.validationMessage = errorMessage;
             }
           } catch (e) {
             inputBox.enabled = true;
             inputBox.busy = false;
-            inputBox.placeholder = 'Click the $(sparkle) icon on the top right to auto-generate, or type manually';
+            inputBox.placeholder = 'Click the ✨ icon on the top right to auto-generate, or type manually';
             inputBox.value = prevValue;
             if (e instanceof CancellationError) {
               inputBox.validationMessage = '';
@@ -3185,7 +3186,7 @@ async function commitAndPushCommand(payload) {
     const inputBox = vscode.window.createInputBox();
     inputBox.title = 'Commit & Push';
     inputBox.prompt = '✨ AI Auto-Generation';
-    inputBox.placeholder = 'Click the $(sparkle) icon on the top right to auto-generate, or type manually';
+    inputBox.placeholder = 'Click the ✨ icon on the top right to auto-generate, or type manually';
     inputBox.ignoreFocusOut = true;
     inputBox.buttons = [
       {
@@ -3287,7 +3288,7 @@ async function commitAndPushCommand(payload) {
           if (e instanceof CancellationError) {
             inputBox.enabled = true;
             inputBox.busy = false;
-            inputBox.placeholder = 'Click the $(sparkle) icon on the top right to auto-generate, or type manually';
+            inputBox.placeholder = 'Click the ✨ icon on the top right to auto-generate, or type manually';
             inputBox.value = prevValue;
             inputBox.validationMessage = '';
             generationPending = false;
@@ -3302,14 +3303,14 @@ async function commitAndPushCommand(payload) {
         }
 
         inputBox.value = generated.content || prevValue;
-        inputBox.placeholder = 'Click the $(sparkle) icon on the top right to auto-generate, or type manually';
+        inputBox.placeholder = 'Click the ✨ icon on the top right to auto-generate, or type manually';
         inputBox.enabled = true;
         inputBox.busy = false;
         inputBox.validationMessage = '';
       } catch (error) {
         inputBox.enabled = true;
         inputBox.busy = false;
-        inputBox.placeholder = 'Click the $(sparkle) icon on the top right to auto-generate, or type manually';
+        inputBox.placeholder = 'Click the ✨ icon on the top right to auto-generate, or type manually';
         inputBox.value = prevValue;
         const errorMessage = error && error.message ? error.message : 'Failed to generate commit message.';
         inputBox.validationMessage = errorMessage;
@@ -3734,6 +3735,7 @@ function activate(context) {
   console.log('[GitHub Automator] activate() started');
   
   extensionContext = context;
+  initCredentialManager(context);
   outputChannel = createOutputChannel();
   context.subscriptions.push(outputChannel);
   console.log(`[GitHub Automator] output channel created: ${Date.now() - startTime} ms`);
