@@ -1,0 +1,16 @@
+.vscode/**
+.vscode-test/**
+scripts/**
+**/*.vsix
+**/.env
+.env
+**/__pycache__/**
+**/*.pyc
+**/venv/**
+**/.venv/**
+src/**/*.map
+src/**/*.ts
+test/**
+.gitignore
+.git/**
+node_modules/**/test/**
