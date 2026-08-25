@@ -12,7 +12,7 @@ function copyFolderSync(from, to) {
         const srcPath = path.join(from, item.name);
         const destPath = path.join(to, item.name);
 
-        if (item.name === '__pycache__' || item.name.endsWith('.pyc') || item.name === 'venv') {
+        if (item.name === '__pycache__' || item.name.endsWith('.pyc') || item.name === 'venv' || item.name === '.venv' || item.name === '.env' || item.name.endsWith('.vsix')) {
             continue;
         }
 
@@ -29,6 +29,10 @@ const extBackend = path.join(__dirname, '..', 'backend');
 
 console.log('Copying backend folder to extension/backend...');
 if (fs.existsSync(rootBackend)) {
+    if (fs.existsSync(extBackend)) {
+        console.log('Cleaning existing extension/backend directory...');
+        fs.rmSync(extBackend, { recursive: true, force: true });
+    }
     copyFolderSync(rootBackend, extBackend);
     console.log('Backend copied successfully.');
 } else {
