@@ -11,6 +11,7 @@ opener = urllib.request.build_opener(proxy_support)
 urllib.request.install_opener(opener)
 
 def main():
+    print(json.dumps({"type": "ready", "status": "ok"}), flush=True)
     while True:
         try:
             line = sys.stdin.readline()
