@@ -2,12 +2,13 @@ const vscode = require('vscode');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const { runPythonScript, getPersistentPythonProcess } = require('./pythonBridge');
+const { runPythonScript, getPersistentPythonProcess, killPersistentPythonProcess } = require('./pythonBridge');
 const { callAiService, CancellationError } = require('./services/aiClient');
 const { initCredentialManager, configureGeminiApiKey, removeGeminiApiKey } = require('./services/credentialManager');
 const { publishFolder } = require('./services/repositoryPublisher');
 const { ReadmeCodeLensProvider } = require('./readmeCodeLensProvider');
 const { parseSections, matchSections, reassembleDocument } = require('./readmeSectionParser');
+const { DependencyManager } = require('./services/dependencyManager');
 
 const EXTENSION_NAME = 'GitHub Automator';
 const AUTH_SECRET_KEY = 'github-automator.token';
@@ -3730,7 +3731,7 @@ async function showPanelCommand() {
   });
 }
 
-function activate(context) {
+async function activate(context) {
   const startTime = Date.now();
   console.log('[GitHub Automator] activate() started');
   
@@ -3739,6 +3740,12 @@ function activate(context) {
   outputChannel = createOutputChannel();
   context.subscriptions.push(outputChannel);
   console.log(`[GitHub Automator] output channel created: ${Date.now() - startTime} ms`);
+
+  const depManager = new DependencyManager(getBackendRoot());
+  const depsOk = await depManager.ensureDependencies(outputChannel);
+  if (!depsOk) {
+    vscode.window.showErrorMessage('GitHub Automator requires missing dependencies to be installed. Some features may not work.');
+  }
 
   // Automatically migrate legacy 'gemini-1.5-flash' setting to 'gemini-3.6-flash'
   try {
@@ -3754,15 +3761,19 @@ function activate(context) {
   console.log(`[GitHub Automator] config migrated: ${Date.now() - startTime} ms`);
 
   console.log('[GitHub Automator] Python bridge initialization started');
-  // Warm up the Python daemon asynchronously in the background so it's ready before the user's first action
-  getPersistentPythonProcess(getBackendRoot()).catch(e => {
-    log(`Daemon warm-up failed: ${e && e.message ? e.message : e}`);
-  });
-  console.log(`[GitHub Automator] Python bridge initialization started (async): ${Date.now() - startTime} ms`);
+  // Wait for the Python daemon to be ready
+  try {
+    await getPersistentPythonProcess(getBackendRoot());
+    console.log(`[GitHub Automator] Python bridge initialization finished: ${Date.now() - startTime} ms`);
+  } catch (e) {
+    log(`Daemon startup failed: ${e && e.message ? e.message : e}`);
+    vscode.window.showErrorMessage(`GitHub Automator: Backend failed to start. ${e.message}`);
+  }
 
   console.log('[GitHub Automator] providers registered');
   reposViewProvider = new RepositoriesWebviewProvider(context);
   actionsViewProvider = new ActionsWebviewProvider(context);
+
   readmeCodeLensProvider = new ReadmeCodeLensProvider();
   readmeCodeLensProvider.activeReadmeSessions = activeReadmeSessions;
 
@@ -3867,6 +3878,7 @@ function activate(context) {
 
 function deactivate() {
   log('Extension deactivated');
+  killPersistentPythonProcess();
 }
 
 module.exports = {
