@@ -92,7 +92,15 @@ function getPersistentPythonProcess(backendRoot) {
       cmd = daemonExePath;
       args = [];
     } else {
-      const pythonCommand = await detectPythonAsync();
+      let pythonCommand;
+      const venvPythonPath = isWin ? path.join(backendRoot, '.venv', 'Scripts', 'python.exe') : path.join(backendRoot, '.venv', 'bin', 'python');
+      if (fs.existsSync(venvPythonPath)) {
+        pythonCommand = [venvPythonPath];
+        console.log(`[PYTHON BRIDGE] Found virtual environment at ${venvPythonPath}`);
+      } else {
+        pythonCommand = await detectPythonAsync();
+      }
+      
       const daemonPath = path.join(backendRoot, 'daemon.py');
       console.log(`[PYTHON BRIDGE] Mode: Development. Spawning python daemon using ${pythonCommand[0]} and ${daemonPath}`);
       console.log(`[PYTHON BRIDGE] CWD: ${backendRoot}`);
@@ -110,47 +118,71 @@ function getPersistentPythonProcess(backendRoot) {
       windowsHide: true
     });
 
-    let buffer = '';
-
-    proc.stdout.on('data', chunk => {
-      buffer += chunk.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop(); // Keep last partial line
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const response = JSON.parse(line);
-          if (response.id && pendingRequests.has(response.id)) {
-            const { resolve, reject } = pendingRequests.get(response.id);
-            pendingRequests.delete(response.id);
-            
-            if (response.error) {
-              reject(new Error(response.error));
-            } else {
-              resolve(response.result);
-            }
-          }
-        } catch (e) {
-          // Ignore unparseable lines
+    return new Promise((resolveReady, rejectReady) => {
+      let isReady = false;
+      const readyTimeout = setTimeout(() => {
+        if (!isReady) {
+          console.warn('[PYTHON BRIDGE] Daemon ready timeout reached, assuming ready.');
+          isReady = true;
+          resolveReady(proc);
         }
-      }
-    });
+      }, 5000);
 
-    proc.stderr.on('data', chunk => {
-      console.error(`Python daemon stderr: ${chunk.toString()}`);
-    });
+      let buffer = '';
 
-    proc.on('close', code => {
-      persistentPythonProcessPromise = null;
-      for (const [id, { reject }] of pendingRequests) {
-        reject(new Error(`Python daemon exited with code ${code}`));
-      }
-      pendingRequests.clear();
-      console.error(`[DAEMON CLOSED] code=${code}, time=${Date.now()}`);
-    });
+      proc.stdout.on('data', chunk => {
+        buffer += chunk.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // Keep last partial line
 
-    return proc;
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const response = JSON.parse(line);
+            
+            if (response.type === 'ready') {
+              if (!isReady) {
+                isReady = true;
+                clearTimeout(readyTimeout);
+                console.log('[PYTHON BRIDGE] Daemon is ready.');
+                resolveReady(proc);
+              }
+              continue;
+            }
+
+            if (response.id && pendingRequests.has(response.id)) {
+              const { resolve, reject } = pendingRequests.get(response.id);
+              pendingRequests.delete(response.id);
+              
+              if (response.error) {
+                reject(new Error(response.error));
+              } else {
+                resolve(response.result);
+              }
+            }
+          } catch (e) {
+            // Ignore unparseable lines
+          }
+        }
+      });
+
+      proc.stderr.on('data', chunk => {
+        console.error(`Python daemon stderr: ${chunk.toString()}`);
+      });
+
+      proc.on('close', code => {
+        persistentPythonProcessPromise = null;
+        if (!isReady) {
+          clearTimeout(readyTimeout);
+          rejectReady(new Error(`Daemon exited prematurely with code ${code}`));
+        }
+        for (const [id, { reject }] of pendingRequests) {
+          reject(new Error(`Python daemon exited with code ${code}`));
+        }
+        pendingRequests.clear();
+        console.error(`[DAEMON CLOSED] code=${code}, time=${Date.now()}`);
+      });
+    });
   })();
 
   return persistentPythonProcessPromise;
@@ -172,7 +204,20 @@ async function runPythonScript(scriptPath, payload, backendRoot) {
   });
 }
 
+async function killPersistentPythonProcess() {
+  if (persistentPythonProcessPromise) {
+    try {
+      const proc = await persistentPythonProcessPromise;
+      if (proc) proc.kill();
+    } catch (e) {
+      // Ignore
+    }
+    persistentPythonProcessPromise = null;
+  }
+}
+
 module.exports = {
   runPythonScript,
-  getPersistentPythonProcess
+  getPersistentPythonProcess,
+  killPersistentPythonProcess
 };
