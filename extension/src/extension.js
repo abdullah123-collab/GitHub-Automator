@@ -79,6 +79,9 @@ class RepositoriesWebviewProvider {
         case 'deleteRepo':
           await deleteRepoFromCard(message.payload && message.payload.repoName, message.payload && message.payload.owner);
           break;
+        case 'renameRepo':
+          await renameRepoCommand(message.payload);
+          break;
         case 'updateDescription':
           await updateRepoDescription(message.payload && message.payload.repoName, message.payload && message.payload.owner, message.payload && message.payload.description);
           break;
@@ -899,6 +902,211 @@ class RepositoriesWebviewProvider {
             }
           });
 
+          let activeNameEditSession = null;
+
+          function editRepoName(element) {
+            if (activeNameEditSession) {
+              if (activeNameEditSession.element === element) return;
+              activeNameEditSession.cancel();
+            }
+
+            const currentName = element.getAttribute('data-repo') || element.innerText.trim();
+            const owner = element.getAttribute('data-owner') || '';
+            const repoId = element.getAttribute('data-id') || '';
+            const originalHtml = element.innerHTML;
+
+            element.classList.add('editing');
+            element.innerHTML = 
+              '<div class="repo-name-editor" style="display: flex; flex-direction: column; gap: 2px; width: 100%; box-sizing: border-box; cursor: default;">' +
+                '<div style="display: flex; align-items: center; gap: 4px; width: 100%; box-sizing: border-box;">' +
+                  '<input type="text" class="repo-name-input" aria-label="Repository name" value="' + currentName.replace(/"/g, '&quot;') + '" style="flex: 1; min-width: 80px; max-width: 220px; box-sizing: border-box; padding: 2px 6px; font-size: 13px; font-weight: 600; font-family: inherit; background: var(--vscode-input-background, #1e1e1e); color: var(--vscode-input-foreground, #cccccc); border: 1px solid var(--vscode-focusBorder, #007fd4); border-radius: 3px; outline: none;" />' +
+                  '<button class="repo-name-btn confirm" aria-label="Confirm rename" title="Confirm rename (Enter)" style="flex-shrink: 0; width: 22px; height: 22px; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: var(--vscode-button-background, #0e639c); color: var(--vscode-button-foreground, #ffffff); border: none; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: bold;">✓</button>' +
+                  '<button class="repo-name-btn cancel" aria-label="Cancel rename" title="Cancel rename (Escape)" style="flex-shrink: 0; width: 22px; height: 22px; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: var(--vscode-button-secondaryBackground, #3a3d41); color: var(--vscode-button-secondaryForeground, #ffffff); border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">✕</button>' +
+                '</div>' +
+                '<div class="repo-name-error" style="color: var(--vscode-errorForeground, #f48771); font-size: 11px; display: none; margin-top: 2px; line-height: 1.2;"></div>' +
+              '</div>';
+
+            const input = element.querySelector('.repo-name-input');
+            const confirmBtn = element.querySelector('.repo-name-btn.confirm');
+            const cancelBtn = element.querySelector('.repo-name-btn.cancel');
+            const errorEl = element.querySelector('.repo-name-error');
+
+            input.focus();
+            input.select();
+
+            let isSubmitting = false;
+
+            const validateClientSide = (val) => {
+              const trimmed = (val || '').trim();
+              if (!trimmed) {
+                return 'Repository name cannot be empty.';
+              }
+              if (trimmed.length > 100) {
+                return 'Repository name cannot exceed 100 characters.';
+              }
+              if (!/^[a-zA-Z0-9_.-]+$/.test(trimmed)) {
+                return 'Only letters, numbers, hyphens, periods, and underscores allowed.';
+              }
+              if (/^[.-]/.test(trimmed) || /[.-]$/.test(trimmed)) {
+                return 'Cannot start or end with a period or hyphen.';
+              }
+              if (trimmed.toLowerCase() === '.git' || trimmed.toLowerCase().endsWith('.git')) {
+                return 'Cannot end with .git.';
+              }
+              return null;
+            };
+
+            const cancel = () => {
+              if (activeNameEditSession && activeNameEditSession.element === element) {
+                activeNameEditSession = null;
+              }
+              element.classList.remove('editing');
+              element.innerHTML = originalHtml;
+            };
+
+            const save = () => {
+              if (isSubmitting) return;
+              const newName = input.value.trim();
+              if (newName === currentName) {
+                cancel();
+                return;
+              }
+
+              const err = validateClientSide(newName);
+              if (err) {
+                errorEl.innerText = err;
+                errorEl.style.display = 'block';
+                input.style.borderColor = 'var(--vscode-errorForeground, #f48771)';
+                return;
+              }
+
+              isSubmitting = true;
+              input.disabled = true;
+              confirmBtn.disabled = true;
+              cancelBtn.disabled = true;
+              confirmBtn.innerHTML = '<span class="loading" style="width: 10px; height: 10px; display: inline-block; border-radius: 50%;"></span>';
+              errorEl.style.display = 'none';
+
+              post('renameRepo', {
+                oldName: currentName,
+                newName: newName,
+                owner: owner,
+                id: repoId
+              });
+            };
+
+            const handleRenamed = (payload) => {
+              if (payload.noOp) {
+                cancel();
+                return;
+              }
+              const confirmedName = payload.newName || input.value.trim();
+              if (activeNameEditSession && activeNameEditSession.element === element) {
+                activeNameEditSession = null;
+              }
+              element.classList.remove('editing');
+              element.setAttribute('data-repo', confirmedName);
+              element.innerText = confirmedName;
+
+              const card = element.closest('.repo-card');
+              if (card) {
+                card.id = 'repo-card-' + confirmedName;
+                const openCloneSpan = card.querySelector('.repo-icon-container span');
+                if (openCloneSpan && payload.cloneUrl) {
+                  openCloneSpan.setAttribute('onclick', "post('openRepo', { repoName: '" + confirmedName.replace(/'/g, "\\'") + "', cloneUrl: '" + payload.cloneUrl.replace(/'/g, "\\'") + "' })");
+                }
+                const descEl = card.querySelector('[id^="desc-"]');
+                if (descEl) {
+                  descEl.id = 'desc-' + confirmedName;
+                  descEl.setAttribute('ondblclick', "editDescription('" + confirmedName.replace(/'/g, "\\'") + "', '" + owner.replace(/'/g, "\\'") + "', this)");
+                }
+                const badgeEl = card.querySelector('.branch-badge');
+                if (badgeEl) {
+                  badgeEl.id = 'badge-' + confirmedName;
+                  const branchName = badgeEl.innerText.trim();
+                  badgeEl.setAttribute('onclick', "post('manageBranch', { repoName: '" + confirmedName.replace(/'/g, "\\'") + "', owner: '" + owner.replace(/'/g, "\\'") + "', isCloned: " + (payload.cloneUrl ? 'true' : 'false') + ", cloneUrl: '" + (payload.cloneUrl || '').replace(/'/g, "\\'") + "', currentBranch: '" + branchName + "' })");
+                }
+                const trashBtn = card.querySelector('.repo-action');
+                if (trashBtn) {
+                  trashBtn.setAttribute('onclick', "post('deleteRepo', { repoName: '" + confirmedName.replace(/'/g, "\\'") + "', owner: '" + owner.replace(/'/g, "\\'") + "' })");
+                }
+
+                if (payload.sortOption === 'name') {
+                  const grid = document.querySelector('.repo-grid');
+                  if (grid) {
+                    const cards = Array.from(grid.querySelectorAll('.repo-card'));
+                    cards.sort((a, b) => {
+                      const nameA = (a.querySelector('.repo-name') && a.querySelector('.repo-name').getAttribute('data-repo') || '').toLowerCase();
+                      const nameB = (b.querySelector('.repo-name') && b.querySelector('.repo-name').getAttribute('data-repo') || '').toLowerCase();
+                      return nameA.localeCompare(nameB);
+                    });
+                    cards.forEach(c => grid.appendChild(c));
+                  }
+                }
+              }
+            };
+
+            const handleFailed = (payload) => {
+              isSubmitting = false;
+              input.disabled = false;
+              confirmBtn.disabled = false;
+              cancelBtn.disabled = false;
+              confirmBtn.innerHTML = '✓';
+              errorEl.innerText = payload.error || 'Failed to rename repository';
+              errorEl.style.display = 'block';
+              input.style.borderColor = 'var(--vscode-errorForeground, #f48771)';
+              input.focus();
+            };
+
+            activeNameEditSession = {
+              element,
+              repoName: currentName,
+              owner,
+              cancel,
+              save,
+              handleRenamed,
+              handleFailed
+            };
+
+            confirmBtn.onmousedown = (e) => e.preventDefault();
+            confirmBtn.onclick = (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              save();
+            };
+
+            cancelBtn.onmousedown = (e) => e.preventDefault();
+            cancelBtn.onclick = (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              cancel();
+            };
+
+            input.onkeydown = (e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                save();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancel();
+              }
+            };
+
+            input.onblur = (e) => {
+              if (isSubmitting) return;
+              if (e.relatedTarget === confirmBtn || e.relatedTarget === cancelBtn) return;
+              cancel();
+            };
+          }
+
+          document.addEventListener('dblclick', (e) => {
+            const repoNameEl = e.target.closest('.repo-name');
+            if (!repoNameEl || repoNameEl.classList.contains('editing') || repoNameEl.querySelector('input')) return;
+            e.stopPropagation();
+            e.preventDefault();
+            editRepoName(repoNameEl);
+          });
+
           function editDescription(repoName, owner, element) {
             if (activeEditSession) {
               if (activeEditSession.element === element) return;
@@ -1151,6 +1359,25 @@ class RepositoriesWebviewProvider {
                   element.ondblclick = function() { editDescription(message.payload.repoName, owner, element); };
                 }
               }
+            } else if (message.command === 'repoRenamed') {
+              if (activeNameEditSession && activeNameEditSession.repoName === message.payload.oldName) {
+                activeNameEditSession.handleRenamed(message.payload);
+              } else {
+                const el = document.getElementById('repo-name-' + message.payload.oldName);
+                if (el) {
+                  el.setAttribute('data-repo', message.payload.newName);
+                  el.innerText = message.payload.newName;
+                  el.id = 'repo-name-' + message.payload.newName;
+                }
+                const card = document.getElementById('repo-card-' + message.payload.oldName);
+                if (card) {
+                  card.id = 'repo-card-' + message.payload.newName;
+                }
+              }
+            } else if (message.command === 'repoRenameFailed') {
+              if (activeNameEditSession && activeNameEditSession.repoName === message.payload.oldName) {
+                activeNameEditSession.handleFailed(message.payload);
+              }
             } else if (message.command === 'appendRepos') {
               const grid = document.querySelector('.repo-grid');
               if (grid) {
@@ -1263,10 +1490,12 @@ class RepositoriesWebviewProvider {
     const activeClass = isActive ? ' active' : '';
     const cloneIcon = repo.is_cloned ? folderSvg : cloudSvg;
 
-    return `<div class="repo-card${activeClass}" id="repo-card-${repoName}">
+    const repoIdAttr = repo.id ? ` data-repo-id="${repo.id}"` : '';
+
+    return `<div class="repo-card${activeClass}" id="repo-card-${repoName}"${repoIdAttr}>
       <div class="repo-header" style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
         <div class="repo-title-group" style="display: flex; align-items: center; gap: 8px;">
-          <div class="repo-name" style="font-weight: 600; display: flex; align-items: center; color: var(--vscode-textLink-foreground);">${repo.name || 'Repository'}</div>
+          <div class="repo-name" id="repo-name-${repoName}" data-repo="${(repo.name || 'Repository').replace(/"/g, '&quot;')}" data-owner="${owner.replace(/"/g, '&quot;')}" data-id="${repo.id || ''}" title="Double-click to rename" style="font-weight: 600; display: inline-flex; align-items: center; color: var(--vscode-textLink-foreground); cursor: pointer; user-select: none;">${repo.name || 'Repository'}</div>
           <span class="pill" style="display: flex; align-items: center;">${visibility}</span>
         </div>
         <div class="repo-icon-container" style="width: 28px; text-align: center; flex-shrink: 0; display: flex; justify-content: center; align-items: center;">
@@ -1865,6 +2094,145 @@ async function deleteRepoFromCard(repoName, owner) {
   } catch (error) {
     log(`deleteRepoFromCard failed: ${error && error.message ? error.message : error}`);
     await vscode.window.showErrorMessage(`Repository deletion failed: ${error && error.message ? error.message : error}`);
+  }
+}
+
+async function renameRepoCommand(payload) {
+  const { oldName, newName, owner, id } = payload || {};
+  console.time(`renameRepo-${oldName}`);
+  try {
+    if (!oldName) {
+      return;
+    }
+
+    const trimmedNewName = (newName || '').trim();
+    if (!trimmedNewName) {
+      vscode.window.showErrorMessage('Repository name cannot be empty.');
+      if (reposViewProvider && reposViewProvider.view) {
+        reposViewProvider.view.webview.postMessage({
+          command: 'repoRenameFailed',
+          payload: { oldName, error: 'Repository name cannot be empty.' }
+        });
+      }
+      return;
+    }
+
+    if (trimmedNewName === oldName) {
+      if (reposViewProvider && reposViewProvider.view) {
+        reposViewProvider.view.webview.postMessage({
+          command: 'repoRenamed',
+          payload: { oldName, newName: oldName, noOp: true }
+        });
+      }
+      return;
+    }
+
+    if (!await ensureAuthenticated()) {
+      if (reposViewProvider && reposViewProvider.view) {
+        reposViewProvider.view.webview.postMessage({
+          command: 'repoRenameFailed',
+          payload: { oldName, error: 'Not authenticated. Please sign in first.' }
+        });
+      }
+      return;
+    }
+
+    const token = await getStoredSecret(AUTH_SECRET_KEY);
+    const { renameRepo } = require('./services/githubService');
+    const result = await renameRepo(token, owner, oldName, trimmedNewName, getWorkspacePath());
+
+    if (!result || !result.success) {
+      const errMsg = (result && result.error) || 'Failed to rename repository';
+      vscode.window.showErrorMessage(`Rename failed: ${errMsg}`);
+      if (reposViewProvider && reposViewProvider.view) {
+        reposViewProvider.view.webview.postMessage({
+          command: 'repoRenameFailed',
+          payload: { oldName, error: errMsg }
+        });
+      }
+      return;
+    }
+
+    if (result.no_op) {
+      if (reposViewProvider && reposViewProvider.view) {
+        reposViewProvider.view.webview.postMessage({
+          command: 'repoRenamed',
+          payload: { oldName, newName: oldName, noOp: true }
+        });
+      }
+      return;
+    }
+
+    const confirmedName = result.name || trimmedNewName;
+
+    // Update in-memory state in reposViewProvider
+    if (reposViewProvider && reposViewProvider.state && reposViewProvider.state.repos) {
+      let repoIndex = -1;
+      if (id) {
+        repoIndex = reposViewProvider.state.repos.findIndex(r => r.id === id);
+      }
+      if (repoIndex === -1) {
+        repoIndex = reposViewProvider.state.repos.findIndex(r => r.name === oldName && (!owner || !r.owner || r.owner.toLowerCase() === owner.toLowerCase()));
+      }
+      if (repoIndex === -1) {
+        repoIndex = reposViewProvider.state.repos.findIndex(r => r.name === oldName);
+      }
+
+      if (repoIndex !== -1) {
+        const repo = reposViewProvider.state.repos[repoIndex];
+        repo.name = confirmedName;
+        if (result.url) repo.url = result.url;
+        if (result.clone_url) repo.clone_url = result.clone_url;
+        if (result.id) repo.id = result.id;
+      }
+
+      // Re-sort if current sort mode is name
+      if (reposViewProvider.state.sortOption === 'name') {
+        reposViewProvider.state.repos.sort((a, b) => (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase()));
+      }
+    }
+
+    // Update recently opened repositories in workspaceState
+    const recentsKey = 'recently-opened-repos';
+    let openedList = extensionContext.workspaceState.get(recentsKey) || [];
+    if (openedList.includes(oldName)) {
+      openedList = openedList.map(n => n === oldName ? confirmedName : n);
+      await extensionContext.workspaceState.update(recentsKey, openedList);
+    }
+
+    // Notifications
+    if (result.remote_warning) {
+      vscode.window.showWarningMessage(result.remote_warning);
+    }
+    vscode.window.showInformationMessage(`Repository renamed to '${confirmedName}' successfully.`);
+
+    // Notify webview
+    if (reposViewProvider && reposViewProvider.view) {
+      reposViewProvider.view.webview.postMessage({
+        command: 'repoRenamed',
+        payload: {
+          oldName,
+          newName: confirmedName,
+          owner: result.owner || owner,
+          url: result.url,
+          cloneUrl: result.clone_url,
+          id: result.id || id,
+          sortOption: reposViewProvider.state.sortOption || 'name'
+        }
+      });
+    }
+  } catch (error) {
+    const errText = error && error.message ? error.message : String(error);
+    log(`renameRepoCommand failed: ${errText}`);
+    vscode.window.showErrorMessage(`Rename failed: ${errText}`);
+    if (reposViewProvider && reposViewProvider.view) {
+      reposViewProvider.view.webview.postMessage({
+        command: 'repoRenameFailed',
+        payload: { oldName, error: errText }
+      });
+    }
+  } finally {
+    console.timeEnd(`renameRepo-${oldName}`);
   }
 }
 
