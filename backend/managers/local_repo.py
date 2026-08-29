@@ -446,6 +446,11 @@ if __name__ == "__main__":
             url = args.get("url", "")
             ok, msg = _run(["git", "remote", "add", name, url], cwd=repo_path)
             print(json.dumps({"success": ok, "message": msg}))
+        elif action == "remote_set_url":
+            name = args.get("name", "origin")
+            url = args.get("url", "")
+            ok, msg = _run(["git", "remote", "set-url", name, url], cwd=repo_path)
+            print(json.dumps({"success": ok, "message": msg}))
         elif action == "remote_rename":
             old = args.get("old", "")
             new_name = args.get("new", "")
