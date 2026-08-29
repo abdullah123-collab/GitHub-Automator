@@ -24,7 +24,21 @@ async function checkRemoteRepoExists(token, name) {
   }, backendRoot);
 }
 
+async function renameRepo(token, owner, oldName, newName, workspacePath) {
+  const scriptPath = path.join(backendRoot, 'managers/repo_manager.py');
+  return runPythonScript(scriptPath, {
+    action: 'rename',
+    token,
+    owner: owner || '',
+    old_name: oldName,
+    new_name: newName,
+    repo_path: workspacePath
+  }, backendRoot);
+}
+
 module.exports = {
   createRepo,
-  checkRemoteRepoExists
+  checkRemoteRepoExists,
+  renameRepo
 };
+

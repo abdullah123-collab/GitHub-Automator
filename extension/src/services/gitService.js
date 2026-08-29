@@ -28,10 +28,16 @@ async function pushToRemote(repoPath) {
   return runPythonScript(scriptPath, { action: 'push_repo', repo_path: repoPath }, backendRoot);
 }
 
+async function setRemoteUrl(repoPath, remoteName, url) {
+  const scriptPath = path.join(backendRoot, 'managers/local_repo.py');
+  return runPythonScript(scriptPath, { action: 'remote_set_url', repo_path: repoPath, name: remoteName, url }, backendRoot);
+}
+
 module.exports = {
   initGitRepo,
   getRepoInfo,
   stageAndCommit,
   addRemote,
-  pushToRemote
+  pushToRemote,
+  setRemoteUrl
 };
