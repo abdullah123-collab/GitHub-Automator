@@ -475,6 +475,11 @@ if __name__ == "__main__":
                 print(json.dumps({"success": True, "remotes": remotes}))
             else:
                 print(json.dumps({"success": False, "message": msg}))
+        elif action == "health_check":
+            from services.health_checker import check_repository_health
+            threshold_mb = args.get("threshold_mb", 50.0)
+            res = check_repository_health(repo_path, threshold_mb)
+            print(json.dumps(res))
         else:
             print(json.dumps({"success": False, "error": f"Unknown action: {action}"}))
     except Exception as e:
