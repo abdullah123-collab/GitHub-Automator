@@ -85,6 +85,11 @@
         "title": "GitHub Automator: Discard AI README"
       },
       {
+        "command": "github-automator.healthCheck",
+        "title": "GitHub Automator: Repository Health Check",
+        "icon": "$(pulse)"
+      },
+      {
         "command": "github-automator.configureGeminiApiKey",
         "title": "GitHub Automator: Configure Gemini API Key"
       },
@@ -95,6 +100,11 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "github-automator.healthCheck",
+          "when": "view == github-automator.repoView",
+          "group": "navigation@6"
+        },
         {
           "command": "github-automator.generateReadme",
           "when": "view == github-automator.repoView",

@@ -9,6 +9,7 @@ const { publishFolder } = require('./services/repositoryPublisher');
 const { ReadmeCodeLensProvider } = require('./readmeCodeLensProvider');
 const { parseSections, matchSections, reassembleDocument } = require('./readmeSectionParser');
 const { DependencyManager } = require('./services/dependencyManager');
+const { HealthCheckPanel } = require('./healthCheckPanel');
 
 const EXTENSION_NAME = 'GitHub Automator';
 const AUTH_SECRET_KEY = 'github-automator.token';
@@ -99,6 +100,9 @@ class RepositoriesWebviewProvider {
           break;
         case 'repoOptionsAction':
           await handleRepoOptionsAction(message.payload);
+          break;
+        case 'healthCheck':
+          await repositoryHealthCheckCommand(message.payload && message.payload.repoPath, message.payload && message.payload.repoName);
           break;
         default:
           break;
@@ -540,6 +544,8 @@ class RepositoriesWebviewProvider {
                 html += '<div class="popover-item" onclick="openSubmenu(event, \\'branches\\')"><span class="popover-item-label">' + icons.switchBranch + 'Branches</span>' + icons.chevronRight + '</div>';
               }
               html += '<div class="popover-item" onclick="openSubmenu(event, \\'remote\\')"><span class="popover-item-label">' + icons.sync + 'Remote</span>' + icons.chevronRight + '</div>';
+              html += '<div class="popover-divider"></div>';
+              html += '<div class="popover-item" onclick="postAction(\\'healthCheck\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.sync + 'Health Check</span></div>';
             }
             else if (menuType === 'branches') {
               html += '<div class="popover-item" onclick="postAction(\\'merge\\', \\'' + repoName + '\\')"><span class="popover-item-label">' + icons.mergeBranch + 'Merge Branch</span></div>';
@@ -1550,6 +1556,8 @@ class ActionsWebviewProvider {
       commitAndPushCommand();
     } else if (command === 'aiGenerate') {
       aiGenerateCommand();
+    } else if (command === 'healthCheck') {
+      repositoryHealthCheckCommand();
     }
   }
 
@@ -1584,6 +1592,7 @@ class ActionsWebviewProvider {
           <div class="header">🗂️ GIT ACTIONS</div>
           <div class="actions">
             <button class="primary" id="commitBtn">⚡ Commit & Push</button>
+            <button style="background:#3a3d41; margin-top:4px;" id="healthBtn">🩺 Repository Health Check</button>
             <div class="muted">Use the native input box to review and edit your commit message before pushing.</div>
           </div>
         </div>
@@ -1592,6 +1601,9 @@ class ActionsWebviewProvider {
           function post(command, payload) { vscode.postMessage({ command, payload }); }
           document.getElementById('commitBtn').addEventListener('click', () => {
             post('commitAndPush');
+          });
+          document.getElementById('healthBtn').addEventListener('click', () => {
+            post('healthCheck');
           });
         </script>
       </body>
@@ -2573,6 +2585,11 @@ async function handlePopoverAction(payload) {
   }
 
   const repoPath = pathResult.path;
+
+  if (action === 'healthCheck') {
+    await repositoryHealthCheckCommand(repoPath, repoName);
+    return;
+  }
 
   const writeActions = ['switch', 'create', 'merge', 'delete', 'pull', 'push', 'sync', 'rebase', 'cherryPick', 'renameBranch', 'branchFromCommit', 'remotePushCurrent'];
   if (currentBranch === 'HEAD' && writeActions.includes(action)) {
@@ -4052,6 +4069,16 @@ async function dismissReadmeSessionCommand(uri) {
 // Old whole-file commands removed. Replaced by section-by-section handlers.
 
 
+async function repositoryHealthCheckCommand(targetPath, targetName) {
+  try {
+    const workspacePath = targetPath || getWorkspacePath();
+    const repoName = targetName || (workspacePath ? path.basename(workspacePath) : 'Current Repository');
+    await HealthCheckPanel.createOrShow(extensionContext.extensionUri, workspacePath, repoName);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Failed to run repository health check: ${err && err.message ? err.message : err}`);
+  }
+}
+
 async function showPanelCommand() {
   const panel = vscode.window.createWebviewPanel('githubAutomatorPanel', 'GitHub Automator', vscode.ViewColumn.One, { enableScripts: true });
   panel.webview.html = `<!DOCTYPE html>
@@ -4069,6 +4096,7 @@ async function showPanelCommand() {
       <button onclick="vscode.postMessage({ command: 'createRepo' })">Create Repo</button>
       <button onclick="vscode.postMessage({ command: 'publishFolder' })">Publish Folder</button>
       <button onclick="vscode.postMessage({ command: 'commitAndPush' })">Commit & Push</button>
+      <button onclick="vscode.postMessage({ command: 'healthCheck' })">Repository Health Check</button>
       <script>const vscode = acquireVsCodeApi();</script>
     </body>
     </html>`;
@@ -4092,6 +4120,9 @@ async function showPanelCommand() {
         break;
       case 'aiGenerate':
         await aiGenerateCommand();
+        break;
+      case 'healthCheck':
+        await repositoryHealthCheckCommand();
         break;
       default:
         break;
@@ -4228,6 +4259,7 @@ async function activate(context) {
     vscode.commands.registerCommand('github-automator.discardReadmeSuggestion', (uri) => discardReadmeSuggestionCommand(uri)),
     vscode.commands.registerCommand('github-automator.commitReadmeChanges', (uri) => commitReadmeChangesCommand(uri)),
     vscode.commands.registerCommand('github-automator.dismissReadmeSession', (uri) => dismissReadmeSessionCommand(uri)),
+    vscode.commands.registerCommand('github-automator.healthCheck', (pathOrItem, name) => repositoryHealthCheckCommand(typeof pathOrItem === 'string' ? pathOrItem : undefined, name)),
 
     vscode.commands.registerCommand('github-automator.configureGeminiApiKey', () => configureGeminiApiKey()),
     vscode.commands.registerCommand('github-automator.removeGeminiApiKey', () => removeGeminiApiKey())
