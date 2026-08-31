@@ -480,6 +480,14 @@ if __name__ == "__main__":
             threshold_mb = args.get("threshold_mb", 50.0)
             res = check_repository_health(repo_path, threshold_mb)
             print(json.dumps(res))
+        elif action == "repository_guard":
+            from services.repository_guard import check_repository_guard
+            operation = args.get("operation", "commit")
+            remote = args.get("remote")
+            branch = args.get("branch")
+            threshold_mb = args.get("threshold_mb", 50.0)
+            res = check_repository_guard(repo_path, operation=operation, remote=remote, branch=branch, threshold_mb=threshold_mb)
+            print(json.dumps(res))
         else:
             print(json.dumps({"success": False, "error": f"Unknown action: {action}"}))
     except Exception as e:
