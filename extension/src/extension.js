@@ -10,6 +10,8 @@ const { ReadmeCodeLensProvider } = require('./readmeCodeLensProvider');
 const { parseSections, matchSections, reassembleDocument } = require('./readmeSectionParser');
 const { DependencyManager } = require('./services/dependencyManager');
 const { HealthCheckPanel } = require('./healthCheckPanel');
+const { runGuardCheck } = require('./services/repositoryGuardService');
+const { RepositoryGuardPanel } = require('./repositoryGuardPanel');
 
 const EXTENSION_NAME = 'GitHub Automator';
 const AUTH_SECRET_KEY = 'github-automator.token';
@@ -2913,6 +2915,18 @@ async function handlePopoverAction(payload) {
   }
 
   else if (action === 'push') {
+    const guardResult = await runGuardCheck(repoPath, { operation: 'push', remote: 'origin', branch: currentBranch });
+    if (guardResult.overallStatus === 'BLOCKED' || guardResult.overallStatus === 'ERROR') {
+      await RepositoryGuardPanel.showOrPrompt(extensionContext.extensionUri, repoPath, guardResult);
+      return;
+    }
+    if (guardResult.overallStatus === 'WARNING') {
+      const choice = await RepositoryGuardPanel.showOrPrompt(extensionContext.extensionUri, repoPath, guardResult);
+      if (!choice || choice.action !== 'continue') {
+        return;
+      }
+    }
+
     await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
       title: "Pushing changes to remote repository...",
@@ -3311,6 +3325,18 @@ async function handlePopoverAction(payload) {
   }
 
   else if (action === 'remotePushCurrent') {
+    const guardResult = await runGuardCheck(repoPath, { operation: 'push', remote: 'origin', branch: currentBranch });
+    if (guardResult.overallStatus === 'BLOCKED' || guardResult.overallStatus === 'ERROR') {
+      await RepositoryGuardPanel.showOrPrompt(extensionContext.extensionUri, repoPath, guardResult);
+      return;
+    }
+    if (guardResult.overallStatus === 'WARNING') {
+      const choice = await RepositoryGuardPanel.showOrPrompt(extensionContext.extensionUri, repoPath, guardResult);
+      if (!choice || choice.action !== 'continue') {
+        return;
+      }
+    }
+
     await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
       title: `Pushing ${currentBranch} to origin...`,
@@ -3593,6 +3619,19 @@ async function commitAndPushCommand(payload) {
       if (!message || !message.trim()) {
         await vscode.window.showWarningMessage('A commit message is required.');
         return;
+      }
+
+      // Repository Guard pre-flight check
+      const guardResult = await runGuardCheck(repoPath, { operation: 'commit' });
+      if (guardResult.overallStatus === 'BLOCKED' || guardResult.overallStatus === 'ERROR') {
+        await RepositoryGuardPanel.showOrPrompt(extensionContext.extensionUri, repoPath, guardResult);
+        return;
+      }
+      if (guardResult.overallStatus === 'WARNING') {
+        const choice = await RepositoryGuardPanel.showOrPrompt(extensionContext.extensionUri, repoPath, guardResult);
+        if (!choice || choice.action !== 'continue') {
+          return;
+        }
       }
 
       let commitResult;
