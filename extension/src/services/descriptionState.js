@@ -186,9 +186,8 @@ class DescriptionEditor {
       if (global.editDescription) global.editDescription(this.repoName, this.owner, this.element);
     };
   }
-}
 
-// Handle backend messages for generated description
+  // Handle backend messages for generated description
   async handleGenerated(payload) {
     if (!payload) return;
     if (payload.success) {
@@ -212,5 +211,6 @@ class DescriptionEditor {
     }
     this._cleanup();
   }
+}
 
 module.exports = { DescriptionEditor };
