@@ -44,6 +44,13 @@ except ImportError:
 from tkinter import ttk, messagebox, simpledialog, filedialog, scrolledtext
 from services.github_api import GitHubAPI
 from services.ai_commit import generate_commit_message
+from services.git_credentials import (
+    build_git_clone_command,
+    build_git_environment,
+    redact_git_output,
+    sanitize_git_url,
+    validate_clone_url,
+)
 from services.repo_registry import repo_exists_locally, register_repo, is_repo_cloned
 from managers.commit_manager import stage_commit_push
 
@@ -977,23 +984,29 @@ class GitHubAutomatorApp:
 
             def task():
                 try:
-                    auth_url = clone_url.replace("https://", f"https://{self.token}@")
+                    valid, validation_error = validate_clone_url(clone_url)
+                    if not valid:
+                        self.root.after(0, lambda: messagebox.showerror("Clone Failed", validation_error))
+                        return
                     result = subprocess.run(
-                        ["git", "clone", auth_url, dest_path],
-                        capture_output=True, text=True, timeout=60, creationflags=CREATION_FLAGS)
+                        build_git_clone_command(clone_url, dest_path),
+                        capture_output=True, text=True, timeout=60,
+                        creationflags=CREATION_FLAGS,
+                        env=build_git_environment(self.token))
                     if result.returncode == 0:
                         self.root.after(0, lambda: self._set_status(f"✅ Cloned: {dest_path}"))
                         # Clone complete → VS Code mein open karo
                         self.root.after(0, lambda: self._open_in_vscode(dest_path))
                     else:
-                        err = result.stderr.strip()
+                        err = redact_git_output(result.stderr, self.token).strip() or "Clone failed."
                         self.root.after(0, lambda: self._set_status("Clone failed."))
                         self.root.after(0, lambda: messagebox.showerror("Clone Failed", err))
                 except FileNotFoundError:
                     self.root.after(0, lambda: messagebox.showerror(
                         "Error", "git installed nahi hai ya PATH mein nahi."))
                 except Exception as e:
-                    self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+                    safe_error = redact_git_output(str(e), self.token)
+                    self.root.after(0, lambda: messagebox.showerror("Error", safe_error))
 
             threading.Thread(target=task, daemon=True).start()
 
@@ -1268,24 +1281,30 @@ class GitHubAutomatorApp:
 
         def task():
             try:
-                auth_url = clone_url.replace("https://", f"https://{self.token}@")
+                valid, validation_error = validate_clone_url(clone_url)
+                if not valid:
+                    self.root.after(0, lambda: messagebox.showerror("Clone Failed", validation_error))
+                    return
                 result = subprocess.run(
-                    ["git", "clone", auth_url, dest_path],
-                    capture_output=True, text=True, timeout=60, creationflags=CREATION_FLAGS)
+                    build_git_clone_command(clone_url, dest_path),
+                    capture_output=True, text=True, timeout=60,
+                    creationflags=CREATION_FLAGS,
+                    env=build_git_environment(self.token))
                 if result.returncode == 0:
                     register_repo(dest_path)
                     self.root.after(0, lambda: self._set_status(f"✅ Cloned to {dest_path}"))
                     self.root.after(0, lambda: messagebox.showinfo(
                         "Cloned!", f"'{repo_name}' cloned to:\n{dest_path}"))
                 else:
-                    err = result.stderr.strip()
+                    err = redact_git_output(result.stderr, self.token).strip() or "Clone failed."
                     self.root.after(0, lambda: self._set_status("Clone failed."))
                     self.root.after(0, lambda: messagebox.showerror("Clone Failed", err))
             except FileNotFoundError:
                 self.root.after(0, lambda: messagebox.showerror(
                     "Error", "git is not installed or not in PATH."))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+                safe_error = redact_git_output(str(e), self.token)
+                self.root.after(0, lambda: messagebox.showerror("Error", safe_error))
 
         threading.Thread(target=task, daemon=True).start()
 
