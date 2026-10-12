@@ -22,6 +22,13 @@ import urllib.request
 import urllib.error
 import re
 from services.github_api import GitHubAPI
+from services.git_credentials import (
+    build_git_clone_command,
+    build_git_environment,
+    redact_git_output,
+    sanitize_git_url,
+    validate_clone_url,
+)
 
 # Hide CMD console window on Windows
 CREATION_FLAGS = 0x08000000 if sys.platform == 'win32' else 0
@@ -29,7 +36,7 @@ from services.repo_registry import (
     repo_exists_locally, find_repo_by_name, register_repo,
     cleanup_registry, get_repo_info, is_repo_cloned,
     load_registry, save_registry, is_valid_git_repo,
-    _get_remote_url, _extract_owner_repo
+    _get_remote_url, _extract_owner_repo, cleanup_historical_credentials
 )
 
 
@@ -147,29 +154,33 @@ def list_repos(api: GitHubAPI, workspace_path: str = None, page: int = 1) -> dic
 
 
 def clone_repo(clone_url: str, dest_path: str, token: str) -> dict:
-    try:
-        # Inject token into clone URL for auth
-        # https://github.com/... → https://token@github.com/...
-        auth_url = clone_url.replace("https://", f"https://{token}@")
+    valid, safe_clone_url = validate_clone_url(clone_url)
+    if not valid:
+        return {"success": False, "error": safe_clone_url}
 
+    try:
         result = subprocess.run(
-            ["git", "clone", auth_url, dest_path],
+            build_git_clone_command(safe_clone_url, dest_path),
             capture_output=True,
             text=True,
             timeout=60,
-            creationflags=CREATION_FLAGS
+            creationflags=CREATION_FLAGS,
+            env=build_git_environment(token),
         )
 
         if result.returncode == 0:
             return {"success": True, "path": dest_path}
         else:
-            return {"success": False, "error": result.stderr.strip()}
+            return {
+                "success": False,
+                "error": redact_git_output(result.stderr, token).strip() or "Clone failed",
+            }
     except FileNotFoundError:
         return {"success": False, "error": "git is not installed or not in PATH"}
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "Clone timed out"}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": redact_git_output(str(e), token)}
 
 
 def check_repo_exists(repo_name: str) -> dict:
@@ -197,6 +208,10 @@ def smart_clone(repo_name: str, clone_url: str, dest_path: str, token: str) -> d
     
     This prevents duplicate clones by registering the repository location.
     """
+    valid, validation_error = validate_clone_url(clone_url)
+    if not valid:
+        return {"success": False, "error": validation_error}
+
     # First check if already exists locally
     if repo_exists_locally(repo_name):
         existing_path = find_repo_by_name(repo_name)
@@ -213,7 +228,7 @@ def smart_clone(repo_name: str, clone_url: str, dest_path: str, token: str) -> d
         return clone_result
     
     # Register in the registry
-    register_result = register_repo(repo_name, dest_path, clone_url)
+    register_result = register_repo(repo_name, dest_path, sanitize_git_url(clone_url))
     if not register_result.get("success"):
         return {
             "success": False,
@@ -542,6 +557,9 @@ if __name__ == "__main__":
     
     elif action == "cleanup_registry":
         result = cleanup_registry()
+
+    elif action == "cleanup_historical_credentials":
+        result = cleanup_historical_credentials(dry_run=args.get("dry_run", True))
 
     elif action == "update_description":
         owner = args.get("owner", "")
