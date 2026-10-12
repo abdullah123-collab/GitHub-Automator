@@ -10,6 +10,13 @@ import uuid
 def log_ai(msg: str):
     print(msg, file=sys.stderr, flush=True)
 
+def _redact_sensitive_text(value: str, api_key: str) -> str:
+    """Keep provider diagnostics useful without exposing the API key."""
+    text = str(value or "")
+    if api_key:
+        text = text.replace(api_key, "[REDACTED]")
+    return text
+
 def generate_text(prompt: str, api_key: str, model: str = "gemini-3.6-flash", max_tokens: int = 150) -> dict:
     """
     Central AI Gateway to abstract AI provider logic.
@@ -42,12 +49,13 @@ def _call_gemini(prompt: str, api_key: str, model: str, max_tokens: int, req_id:
         }]
     }).encode()
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     req = urllib.request.Request(
         url,
         data=payload,
         headers={
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
         }
     )
 
@@ -87,6 +95,7 @@ def _call_gemini(prompt: str, api_key: str, model: str, max_tokens: int, req_id:
             except Exception:
                 err_msg = str(e)
                 err_status = ""
+            err_msg = _redact_sensitive_text(err_msg, api_key)
             
             log_ai(f"[AI ERROR] request_id={req_id} status={status_code} latency_ms={latency_ms} attempt={attempt} error='{err_msg}'")
             
@@ -118,7 +127,8 @@ def _call_gemini(prompt: str, api_key: str, model: str, max_tokens: int, req_id:
                 elif "timed out" in str(e.reason).lower():
                     is_timeout = True
 
-            log_ai(f"[AI ERROR] request_id={req_id} status={'timeout' if is_timeout else 'network_error'} latency_ms={latency_ms} attempt={attempt} error='{str(e)}'")
+            safe_error = _redact_sensitive_text(str(e), api_key)
+            log_ai(f"[AI ERROR] request_id={req_id} status={'timeout' if is_timeout else 'network_error'} latency_ms={latency_ms} attempt={attempt} error='{safe_error}'")
 
             if attempt < max_attempts:
                 time.sleep(backoff_seconds)
@@ -128,10 +138,11 @@ def _call_gemini(prompt: str, api_key: str, model: str, max_tokens: int, req_id:
                 return {"success": False, "error": "TimeoutError: The read operation timed out"}
             else:
                 reason_str = str(e.reason) if hasattr(e, 'reason') else str(e)
+                reason_str = _redact_sensitive_text(reason_str, api_key)
                 return {"success": False, "error": f"NetworkError: {reason_str}"}
 
         except Exception as e:
             latency_ms = int((time.time() - attempt_start) * 1000)
-            log_ai(f"[AI ERROR] request_id={req_id} status=unknown latency_ms={latency_ms} attempt={attempt} error='{str(e)}'")
-            return {"success": False, "error": f"Gemini API error: {str(e)}"}
-
+            safe_error = _redact_sensitive_text(str(e), api_key)
+            log_ai(f"[AI ERROR] request_id={req_id} status=unknown latency_ms={latency_ms} attempt={attempt} error='{safe_error}'")
+            return {"success": False, "error": f"Gemini API error: {safe_error}"}
