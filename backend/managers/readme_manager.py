@@ -344,6 +344,8 @@ def load_source_contents_for_prompt(repo_path: str, important_files: list) -> st
                     snippets.append(f"--- FILE: {rel_path} ---\n{content.strip()}\n")
                     count += 1
                     total_chars += len(content)
+        except (OSError, UnicodeError):
+            continue
     return "\n".join(snippets)
 
 def generate_readme(repo_path: str, existing_content: str = None, selected_text: str = None, model: str = "gemini-3.6-flash", api_key: str = "", ai_mode: str = "gemini") -> dict:

@@ -16,6 +16,7 @@ from managers.readme_manager import (
 )
 
 class ReadmeManagerTests(unittest.TestCase):
+    TEST_API_KEY = "synthetic-test-key"
 
     def setUp(self):
         # Set up a test API key for testing generate_readme
@@ -122,10 +123,14 @@ class ReadmeManagerTests(unittest.TestCase):
         }
         
         with tempfile.TemporaryDirectory() as repo_dir:
-            res = generate_readme(repo_dir, existing_content=None)
+            res = generate_readme(
+                repo_dir,
+                existing_content=None,
+                api_key=self.TEST_API_KEY,
+            )
             self.assertTrue(res["success"])
             self.assertEqual(res["content"], "# Project Title\nThis is a generated README.")
-            self.assertIsNone(res["error_type"])
+            self.assertNotIn("error", res)
 
     @patch('managers.readme_manager.generate_text')
     def test_generate_readme_auth_error(self, mock_generate):
@@ -135,11 +140,10 @@ class ReadmeManagerTests(unittest.TestCase):
             "error": "AuthenticationError: HTTP 403 Forbidden: Invalid key"
         }
         with tempfile.TemporaryDirectory() as repo_dir:
-            res = generate_readme(repo_dir)
+            res = generate_readme(repo_dir, api_key=self.TEST_API_KEY)
             self.assertFalse(res["success"])
-            self.assertEqual(res["error_type"], "auth")
-            self.assertEqual(res["error_source"], "gemini")
-            self.assertEqual(res["error"], "AI authentication failed. Please check your Gemini API configuration.")
+            self.assertEqual(res["error"]["code"], "INVALID_API_KEY")
+            self.assertEqual(res["error"]["message"], "AI authentication failed. Please check your Gemini API configuration.")
 
     @patch('managers.readme_manager.generate_text')
     def test_generate_readme_rate_limit_error(self, mock_generate):
@@ -149,11 +153,10 @@ class ReadmeManagerTests(unittest.TestCase):
             "error": "RateLimitError: HTTP 429 Too Many Requests"
         }
         with tempfile.TemporaryDirectory() as repo_dir:
-            res = generate_readme(repo_dir)
+            res = generate_readme(repo_dir, api_key=self.TEST_API_KEY)
             self.assertFalse(res["success"])
-            self.assertEqual(res["error_type"], "quota")
-            self.assertEqual(res["error_source"], "gemini")
-            self.assertEqual(res["error"], "AI request limit reached. Please try again later.")
+            self.assertEqual(res["error"]["code"], "RATE_LIMIT_EXCEEDED")
+            self.assertEqual(res["error"]["message"], "AI request limit reached. Please try again later.")
 
     @patch('managers.readme_manager.generate_text')
     def test_generate_readme_context_limit_error(self, mock_generate):
@@ -163,11 +166,10 @@ class ReadmeManagerTests(unittest.TestCase):
             "error": "Gemini API error: HTTP 400 Bad Request: token limit exceeded"
         }
         with tempfile.TemporaryDirectory() as repo_dir:
-            res = generate_readme(repo_dir)
+            res = generate_readme(repo_dir, api_key=self.TEST_API_KEY)
             self.assertFalse(res["success"])
-            self.assertEqual(res["error_type"], "context_limit")
-            self.assertEqual(res["error_source"], "gemini")
-            self.assertIn("context is too large", res["error"])
+            self.assertEqual(res["error"]["code"], "RATE_LIMIT_EXCEEDED")
+            self.assertIn("context is too large", res["error"]["message"])
 
     @patch('managers.readme_manager.generate_text')
     def test_generate_readme_network_error(self, mock_generate):
@@ -177,11 +179,10 @@ class ReadmeManagerTests(unittest.TestCase):
             "error": "TimeoutError: The read operation timed out"
         }
         with tempfile.TemporaryDirectory() as repo_dir:
-            res = generate_readme(repo_dir)
+            res = generate_readme(repo_dir, api_key=self.TEST_API_KEY)
             self.assertFalse(res["success"])
-            self.assertEqual(res["error_type"], "network")
-            self.assertEqual(res["error_source"], "gemini")
-            self.assertIn("No internet connection", res["error"])
+            self.assertEqual(res["error"]["code"], "TIMEOUT")
+            self.assertIn("No internet connection", res["error"]["message"])
 
     @patch('managers.readme_manager.generate_text')
     def test_generate_readme_selection_success(self, mock_generate):
@@ -191,7 +192,11 @@ class ReadmeManagerTests(unittest.TestCase):
             "text": "```markdown\nThis is updated selection content.\n```"
         }
         with tempfile.TemporaryDirectory() as repo_dir:
-            res = generate_readme(repo_dir, selected_text="Original selection")
+            res = generate_readme(
+                repo_dir,
+                selected_text="Original selection",
+                api_key=self.TEST_API_KEY,
+            )
             self.assertTrue(res["success"])
             self.assertEqual(res["content"], "This is updated selection content.")
 
