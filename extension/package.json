@@ -52,6 +52,10 @@
         "title": "GitHub Automator: Clone Repository"
       },
       {
+        "command": "github-automator.cleanupHistoricalCredentials",
+        "title": "GitHub Automator: Clean Up Historical Git Credentials"
+      },
+      {
         "command": "github-automator.publishFolder",
         "title": "GitHub Automator: Publish Local Folder to GitHub",
         "icon": "$(cloud-upload)"

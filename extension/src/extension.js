@@ -2419,6 +2419,55 @@ async function cloneRepoCommand() {
   }
 }
 
+async function cleanupHistoricalCredentialsCommand() {
+  try {
+    const preview = await runBackendScript('managers/repo_manager.py', {
+      action: 'cleanup_historical_credentials',
+      dry_run: true
+    });
+    if (!preview || !preview.success) {
+      await vscode.window.showErrorMessage('Historical credential cleanup preview failed.');
+      return;
+    }
+
+    const candidates = (preview.repositories || []).filter(item => item.status === 'would_clean');
+    const manualReviewCount = preview.manual_review_count || 0;
+    if (!candidates.length) {
+      const suffix = manualReviewCount
+        ? ` ${manualReviewCount} repository or remote requires manual review.`
+        : '';
+      await vscode.window.showInformationMessage(`No historical Git credentials were cleaned up.${suffix}`);
+      return;
+    }
+
+    const confirmation = await vscode.window.showWarningMessage(
+      `Remove embedded credentials from ${candidates.length} historical Git remote or registry entr${candidates.length === 1 ? 'y' : 'ies'}?`,
+      { modal: true },
+      'Clean Up'
+    );
+    if (confirmation !== 'Clean Up') {
+      return;
+    }
+
+    const result = await runBackendScript('managers/repo_manager.py', {
+      action: 'cleanup_historical_credentials',
+      dry_run: false
+    });
+    if (!result || !result.success) {
+      await vscode.window.showErrorMessage('Historical credential cleanup failed.');
+      return;
+    }
+    const remaining = result.manual_review_count || 0;
+    await vscode.window.showInformationMessage(
+      `Historical Git credential cleanup completed for ${result.changed_count || 0} entr${result.changed_count === 1 ? 'y' : 'ies'}.` +
+      (remaining ? ` ${remaining} repository or remote requires manual review.` : '')
+    );
+  } catch (error) {
+    log(`Historical credential cleanup failed: ${error && error.message ? error.message : 'unknown error'}`);
+    await vscode.window.showErrorMessage('Historical credential cleanup failed.');
+  }
+}
+
 async function initializeRepoCommand() {
   try {
     const folder = await vscode.window.showOpenDialog({ canSelectFiles: false, canSelectFolders: true, openLabel: 'Select folder to initialize' });
@@ -4289,6 +4338,7 @@ async function activate(context) {
     vscode.commands.registerCommand('github-automator.publishFolder', () => publishFolder(extensionContext, reposViewProvider)),
     vscode.commands.registerCommand('github-automator.deleteRepo', () => deleteRepoCommand()),
     vscode.commands.registerCommand('github-automator.cloneRepo', () => cloneRepoCommand()),
+    vscode.commands.registerCommand('github-automator.cleanupHistoricalCredentials', () => cleanupHistoricalCredentialsCommand()),
     vscode.commands.registerCommand('github-automator.initializeRepo', () => initializeRepoCommand()),
     vscode.commands.registerCommand('github-automator.commitAndPush', () => commitAndPushCommand()),
     vscode.commands.registerCommand('github-automator.aiGenerate', () => aiGenerateCommand()),
