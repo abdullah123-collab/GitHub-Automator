@@ -19,8 +19,10 @@ import json
 import os
 import sys
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional, Dict
+from services.git_credentials import normalize_historical_remote_url
 
 # Hide CMD console window on Windows
 CREATION_FLAGS = 0x08000000 if sys.platform == 'win32' else 0
@@ -67,10 +69,23 @@ def save_registry(registry: Dict) -> None:
     registry_path = get_registry_path()
     
     try:
-        with open(registry_path, 'w', encoding='utf-8') as f:
-            json.dump(registry, f, indent=2, ensure_ascii=False)
+        registry_dir = os.path.dirname(registry_path)
+        fd, temp_path = tempfile.mkstemp(
+            prefix=".repo_registry.",
+            suffix=".tmp",
+            dir=registry_dir,
+        )
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(registry, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, registry_path)
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
     except IOError as e:
-        print(f"Warning: Could not save registry: {e}")
+        print("Warning: Could not save repository registry.")
 
 
 def is_valid_git_repo(repo_path: str) -> bool:
@@ -207,6 +222,111 @@ def _get_remote_url(repo_path: str) -> str:
     except Exception:
         pass
     return ""
+
+
+def _get_remote_urls(repo_path: str) -> Dict[str, str]:
+    """Return configured remote URLs without logging their values."""
+    try:
+        result = subprocess.run(
+            ["git", "config", "--get-regexp", r"^remote\..*\.url$"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=CREATION_FLAGS,
+        )
+        if result.returncode != 0:
+            return {}
+        remotes = {}
+        for line in result.stdout.splitlines():
+            key, separator, url = line.partition(" ")
+            if separator and key.startswith("remote.") and key.endswith(".url"):
+                remotes[key[len("remote."):-len(".url")]] = url.strip()
+        return remotes
+    except (OSError, subprocess.SubprocessError):
+        return {}
+
+
+def cleanup_historical_credentials(dry_run: bool = True) -> Dict:
+    """Preview or remove credential-bearing remote URLs and matching registry metadata."""
+    registry = load_registry()
+    results = []
+    changed_registry = False
+
+    for repo_name, info in registry.items():
+        repo_path = info.get("path") if isinstance(info, dict) else None
+        if not repo_path or not is_valid_git_repo(repo_path):
+            results.append({"repository": repo_name, "status": "manual_review", "reason": "Repository is missing or inaccessible."})
+            continue
+
+        remotes = _get_remote_urls(repo_path)
+        if not remotes:
+            results.append({"repository": repo_name, "status": "manual_review", "reason": "Git remote configuration is inaccessible."})
+            continue
+
+        repo_changes = []
+        manual_review = False
+        for remote_name, current_url in remotes.items():
+            status, normalized_url = normalize_historical_remote_url(current_url)
+            if status == "manual_review":
+                manual_review = True
+                continue
+            if status == "cleanup_required":
+                repo_changes.append((remote_name, current_url, normalized_url))
+
+        registry_url = info.get("clone_url")
+        registry_status, normalized_registry_url = normalize_historical_remote_url(registry_url)
+        matching_remote = any(
+            normalize_historical_remote_url(remote_url)[1] == normalized_registry_url
+            for remote_url in remotes.values()
+        )
+        if registry_status == "cleanup_required" and matching_remote:
+            repo_changes.append(("__registry__", registry_url, normalized_registry_url))
+        elif registry_status == "manual_review" and registry_url:
+            manual_review = True
+
+        if manual_review:
+            results.append({"repository": repo_name, "status": "manual_review", "reason": "One or more URLs require manual review."})
+            continue
+        if not repo_changes:
+            results.append({"repository": repo_name, "status": "unchanged"})
+            continue
+
+        if not dry_run:
+            applied = True
+            for remote_name, _current_url, normalized_url in repo_changes:
+                if remote_name == "__registry__":
+                    continue
+                result = subprocess.run(
+                    ["git", "remote", "set-url", remote_name, normalized_url],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    creationflags=CREATION_FLAGS,
+                )
+                if result.returncode != 0:
+                    applied = False
+                    break
+            if not applied:
+                results.append({"repository": repo_name, "status": "manual_review", "reason": "Remote cleanup could not be completed."})
+                continue
+
+        if any(remote_name == "__registry__" for remote_name, _url, _normalized in repo_changes):
+            info["clone_url"] = normalized_registry_url
+            changed_registry = True
+        results.append({"repository": repo_name, "status": "would_clean" if dry_run else "cleaned"})
+
+    if not dry_run and changed_registry:
+        save_registry(registry)
+
+    return {
+        "success": True,
+        "dry_run": dry_run,
+        "repositories": results,
+        "changed_count": sum(item["status"] in {"would_clean", "cleaned"} for item in results),
+        "manual_review_count": sum(item["status"] == "manual_review" for item in results),
+    }
 
 
 def _has_remote_tracking_branches(repo_path: str) -> bool:
